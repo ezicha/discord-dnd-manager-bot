@@ -4,6 +4,11 @@ from discord.ext import commands
 from dotenv import load_dotenv
 import asyncio
 
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("argus")
+
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 

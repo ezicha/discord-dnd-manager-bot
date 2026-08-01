@@ -1,3 +1,6 @@
+import logging
+logger = logging.getLogger("argus")
+
 import discord
 from discord.ext import commands
 
@@ -142,7 +145,6 @@ class CampaignPlayersView(discord.ui.View):
 
 class ArchiveSelectView(discord.ui.View):
     def __init__(self, campaigns: dict):
-        # campaigns: { "Название кампании": (category, campaign_role, gm_role) }
         super().__init__(timeout=120)
         self.campaigns = campaigns
         self.chosen_names: list[str] = []
@@ -151,7 +153,7 @@ class ArchiveSelectView(discord.ui.View):
         self.select_campaigns.options = options
         self.select_campaigns.max_values = len(options)
 
-    @discord.ui.select(placeholder="Выбери кампании для архивирования:", min_values=1)
+    @discord.ui.select(placeholder="Выбери кампании для архивации", min_values=1)
     async def select_campaigns(self, interaction: discord.Interaction, select: discord.ui.Select):
         self.chosen_names = select.values
         await interaction.response.defer()
@@ -162,61 +164,88 @@ class ArchiveSelectView(discord.ui.View):
             await interaction.response.send_message("Сначала выбери хотя бы одну кампанию.", ephemeral=True)
             return
 
+        if len(self.chosen_names) > 5:
+            await interaction.response.send_message(
+                "За один раз можно ввести префиксы максимум для 5 кампаний "
+                "(ограничение формы Discord). Выбери 5 или меньше.", ephemeral=True
+            )
+            return
+
+        modal = ArchivePrefixModal(self.campaigns, self.chosen_names)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Архивация отменена.", view=None)
+        self.stop()
+
+
+class ArchivePrefixModal(discord.ui.Modal, title="Префиксы для архива"):
+    def __init__(self, campaigns: dict, chosen_names: list):
+        super().__init__()
+        self.campaigns = campaigns
+        self.chosen_names = chosen_names
+        self.prefix_inputs = {}
+
+        for name in chosen_names:
+            default_prefix = name.lower().replace(" ", "-")
+            field = discord.ui.TextInput(
+                label=f"Префикс для «{name}»"[:45],
+                default=default_prefix,
+                max_length=50
+            )
+            self.prefix_inputs[name] = field
+            self.add_item(field)
+
+    async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
 
         archive_category = discord.utils.get(guild.categories, name="Архив")
         if archive_category is None:
             archive_category = await guild.create_category(name="Архив")
+        await archive_category.move(end=True)
 
         archived_summary = []
-
-        # Discord не разрешает в названии канала пробелы — заменяем на дефис,
-        # и приводим к нижнему регистру (так каналы выглядят у Discord "нативно")
-        def slugify(text: str) -> str:
-            return text.lower().replace(" ", "-")
 
         try:
             for chosen_name in self.chosen_names:
                 category, campaign_role, gm_role = self.campaigns[chosen_name]
-                prefix = slugify(chosen_name)
+                prefix = self.prefix_inputs[chosen_name].value.strip() or chosen_name.lower().replace(" ", "-")
 
                 moved_channels = []
                 for channel in list(category.channels):
                     new_name = f"{prefix}-{channel.name}"
                     await channel.edit(category=archive_category, name=new_name, sync_permissions=False)
 
+                    is_voice = isinstance(channel, discord.VoiceChannel)
                     overwrites = channel.overwrites
+                    overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
                     if campaign_role:
-                        overwrites[campaign_role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, connect=False)
+                        overwrites[campaign_role] = discord.PermissionOverwrite(
+                            view_channel=True, send_messages=False,
+                            connect=(False if is_voice else None)
+                        )
                     if gm_role:
-                        overwrites[gm_role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, connect=False)
-                    await channel.edit(overwrites=overwrites)
+                        overwrites[gm_role] = discord.PermissionOverwrite(
+                            view_channel=True, send_messages=False,
+                            connect=(False if is_voice else None)
+                        )
 
                     moved_channels.append(channel)
 
                 await category.delete()
 
                 channels_text = ", ".join(ch.mention for ch in moved_channels) or "каналов не было"
-                archived_summary.append(f"**{chosen_name}**: {channels_text}")
+                archived_summary.append(f"**{chosen_name}** (префикс `{prefix}`): {channels_text}")
 
-            await interaction.followup.send(
-                "Заархивировано:\n" + "\n".join(archived_summary)
-            )
+            await interaction.followup.send("Заархивировано:\n" + "\n".join(archived_summary))
         except Exception as e:
-            # Если что-то пошло не так посередине — сообщаем явно, что успело обработаться
             print(f"Ошибка при архивации: {e}")
             done_text = "\n".join(archived_summary) if archived_summary else "ничего не успело обработаться"
             await interaction.followup.send(
                 f"Что-то пошло не так во время архивации.\nУспело обработаться:\n{done_text}\nОшибка: {e}"
             )
-        finally:
-            self.stop()
-
-    @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="Архивация отменена.", view=None)
-        self.stop()
 
 # --- Выбор кампании для редактирования (если их несколько) ---
 
@@ -328,31 +357,47 @@ class AddChannelModal(discord.ui.Modal, title="Новый канал"):
         self.gm_only = gm_only
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        guild = interaction.guild
+        logger.debug("on_submit вызван, название: %s", self.channel_name.value)
+        try:
+            await interaction.response.defer(ephemeral=True)
+            logger.debug("defer прошёл успешно")
+            guild = interaction.guild
 
-        overwrites = {}
-        if self.gm_only:
-            if self.campaign_role:
-                overwrites[self.campaign_role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
-            if self.gm_role:
-                overwrites[self.gm_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+            overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        }
+            if self.gm_only:
+                if self.campaign_role:
+                    overwrites[self.campaign_role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
+                if self.gm_role:
+                    overwrites[self.gm_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+            else:
+                if self.campaign_role:
+                    overwrites[self.campaign_role] = discord.PermissionOverwrite(view_channel=True)
+                if self.gm_role:
+                    overwrites[self.gm_role] = discord.PermissionOverwrite(view_channel=True)
 
-        if self.channel_type == "text":
-            channel = await guild.create_text_channel(
+            logger.debug("тип канала: %s, overwrites: %s", self.channel_type, overwrites)
+
+            if self.channel_type == "text":
+                channel = await guild.create_text_channel(
                 name=self.channel_name.value,
                 category=self.category,
                 topic=self.channel_topic.value.strip() or None,
-                overwrites=overwrites or None
+                overwrites=overwrites
             )
-        else:
-            channel = await guild.create_voice_channel(
+            else:
+                channel = await guild.create_voice_channel(
                 name=self.channel_name.value,
                 category=self.category,
-                overwrites=overwrites or None
+                overwrites=overwrites
             )
 
-        await interaction.followup.send(f"Канал {channel.mention} создан.")
+            logger.debug("канал создан: %s", channel)
+            await interaction.followup.send(f"Канал {channel.mention} создан.")
+            logger.debug("сообщение отправлено")
+        except Exception as e:
+            logger.error("Ошибка при создании канала: %s", repr(e))
 
 
 # --- Архивация одного/нескольких каналов внутри категории ---
@@ -381,17 +426,37 @@ class ArchiveSingleChannelView(discord.ui.View):
             await interaction.response.send_message("Сначала выбери хотя бы один канал.", ephemeral=True)
             return
 
+        modal = SingleArchivePrefixModal(
+            self.campaign_name, self.category, self.campaign_role, self.gm_role, self.chosen_channels
+        )
+        await interaction.response.send_modal(modal)
+
+
+class SingleArchivePrefixModal(discord.ui.Modal, title="Префикс для архива"):
+    prefix = discord.ui.TextInput(label="Префикс для названий каналов", max_length=50)
+
+    def __init__(self, campaign_name, category, campaign_role, gm_role, chosen_channel_ids):
+        super().__init__()
+        self.campaign_name = campaign_name
+        self.category = category
+        self.campaign_role = campaign_role
+        self.gm_role = gm_role
+        self.chosen_channel_ids = chosen_channel_ids
+        self.prefix.default = campaign_name.lower().replace(" ", "-")
+
+    async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
 
         archive_category = discord.utils.get(guild.categories, name="Архив")
         if archive_category is None:
             archive_category = await guild.create_category(name="Архив")
+        await archive_category.move(end=True)
 
-        prefix = self.campaign_name.lower().replace(" ", "-")
+        prefix = self.prefix.value.strip() or self.campaign_name.lower().replace(" ", "-")
         moved = []
 
-        for channel_id in self.chosen_channels:
+        for channel_id in self.chosen_channel_ids:
             channel = guild.get_channel(int(channel_id))
             if channel is None:
                 continue
@@ -399,21 +464,24 @@ class ArchiveSingleChannelView(discord.ui.View):
             new_name = f"{prefix}-{channel.name}"
             await channel.edit(category=archive_category, name=new_name, sync_permissions=False)
 
+            is_voice = isinstance(channel, discord.VoiceChannel)
             overwrites = channel.overwrites
+            overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
             if self.campaign_role:
-                overwrites[self.campaign_role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
+                overwrites[self.campaign_role] = discord.PermissionOverwrite(
+                    view_channel=True, send_messages=False,
+                    connect=(False if is_voice else None)
+                )
             if self.gm_role:
-                overwrites[self.gm_role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
-            await channel.edit(overwrites=overwrites)
+                overwrites[self.gm_role] = discord.PermissionOverwrite(
+                    view_channel=True, send_messages=False,
+                    connect=(False if is_voice else None)
+                )
 
             moved.append(channel)
 
         moved_text = ", ".join(ch.mention for ch in moved) or "ничего не перенесено"
-        await interaction.followup.send(f"Каналы перенесены в **Архив**: {moved_text}")
-        self.stop()
-
-
-# --- Переименование / изменение описания канала ---
+        await interaction.followup.send(f"Каналы перенесены в **Архив** с префиксом `{prefix}`: {moved_text}")
 
 class RenameChannelSelectView(discord.ui.View):
     def __init__(self, category):
@@ -427,7 +495,6 @@ class RenameChannelSelectView(discord.ui.View):
         channel = interaction.guild.get_channel(int(select.values[0]))
         modal = RenameChannelModal(channel)
         await interaction.response.send_modal(modal)
-
 
 class RenameChannelModal(discord.ui.Modal, title="Изменить канал"):
     new_name = discord.ui.TextInput(label="Новое название", max_length=100)
