@@ -300,7 +300,7 @@ class CampaignEditMenuView(discord.ui.View):
         view = ArchiveSingleChannelView(self.campaign_name, self.category, self.campaign_role, self.gm_role)
         await interaction.response.edit_message(content="Выбери каналы для архивации:", view=view)
 
-    @discord.ui.button(label="Переименовать канал", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Редактировать канал", style=discord.ButtonStyle.primary)
     async def rename_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         channels = self.category.channels
         if not channels:
