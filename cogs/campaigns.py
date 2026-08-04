@@ -68,7 +68,7 @@ class CampaignModal(discord.ui.Modal, title="Новая кампания"):
 
     text_channel_topic = discord.ui.TextInput(
         label="Описание текстового канала",
-        default="D&D 5e",
+        default="D&D 5e (2014г.)",
         style=discord.TextStyle.paragraph,
         required=False,
         max_length=1024
