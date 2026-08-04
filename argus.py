@@ -38,6 +38,7 @@ async def ping(interaction: discord.Interaction):
 async def main():
     async with bot:
         await bot.load_extension("cogs.campaigns")
+        await bot.load_extension("cogs.dice")
         await bot.start(TOKEN)
 
 asyncio.run(main())
