@@ -82,7 +82,7 @@ class CampaignModal(discord.ui.Modal, title="Новая кампания"):
             text_channel_topic=self.text_channel_topic.value.strip()
         )
         await interaction.response.send_message(
-            f"Название: **{self.campaign_name.value}**\nВыбери игроков, которых нужно добавить:",
+            f"Название: **{self.campaign_name.value}**\nВыбери себя и игроков, которых нужно добавить:",
             view=view,
             ephemeral=True
         )
