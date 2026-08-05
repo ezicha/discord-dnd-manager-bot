@@ -309,6 +309,15 @@ class CampaignEditMenuView(discord.ui.View):
         view = RenameChannelSelectView(self.category)
         await interaction.response.edit_message(content="Какой канал изменить?", view=view)
 
+    @discord.ui.button(label="Изменить доступ", style=discord.ButtonStyle.primary)
+    async def change_access(self, interaction: discord.Interaction, button: discord.ui.Button):
+        channels = self.category.channels
+        if not channels:
+            await interaction.response.send_message("В категории пока нет каналов.", ephemeral=True)
+            return
+        view = ChannelAccessSelectView(self.category, self.campaign_role, self.gm_role)
+        await interaction.response.edit_message(content="Какому каналу изменить доступ?", view=view)
+
     @discord.ui.button(label="Закрыть", style=discord.ButtonStyle.secondary)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(content="Меню редактирования закрыто.", view=None)
@@ -522,6 +531,75 @@ class RenameChannelModal(discord.ui.Modal, title="Изменить канал"):
         else:
             await self.channel.edit(name=self.new_name.value)
         await interaction.followup.send(f"Канал {self.channel.mention} обновлён.")
+
+# --- Изменение доступа существующего канала ---
+
+class ChannelAccessSelectView(discord.ui.View):
+    def __init__(self, category, campaign_role, gm_role):
+        super().__init__(timeout=120)
+        self.category = category
+        self.campaign_role = campaign_role
+        self.gm_role = gm_role
+
+        options = [discord.SelectOption(label=ch.name, value=str(ch.id)) for ch in category.channels]
+        self.select_channel.options = options
+
+    @discord.ui.select(placeholder="Какому каналу изменить доступ?")
+    async def select_channel(self, interaction: discord.Interaction, select: discord.ui.Select):
+        channel = interaction.guild.get_channel(int(select.values[0]))
+        view = ChangeAccessApplyView(channel, self.campaign_role, self.gm_role)
+        await interaction.response.edit_message(content=f"Настрой доступ для {channel.mention}:", view=view)
+
+
+class ChangeAccessApplyView(discord.ui.View):
+    def __init__(self, channel, campaign_role, gm_role):
+        super().__init__(timeout=120)
+        self.channel = channel
+        self.campaign_role = campaign_role
+        self.gm_role = gm_role
+        self.gm_only = False
+
+    @discord.ui.select(
+        placeholder="Кто может писать",
+        options=[
+            discord.SelectOption(label="Все участники кампании", value="all"),
+            discord.SelectOption(label="Только ГМ (остальные — только просмотр)", value="gm_only"),
+        ]
+    )
+    async def select_access(self, interaction: discord.Interaction, select: discord.ui.Select):
+        self.gm_only = select.values[0] == "gm_only"
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Применить", style=discord.ButtonStyle.success)
+    async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+
+        overwrites = self.channel.overwrites
+        overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
+        if self.gm_only:
+            if self.campaign_role:
+                overwrites[self.campaign_role] = discord.PermissionOverwrite(
+                    view_channel=True, send_messages=False, connect=False
+                )
+            if self.gm_role:
+                overwrites[self.gm_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+        else:
+            if self.campaign_role:
+                overwrites[self.campaign_role] = discord.PermissionOverwrite(view_channel=True)
+            if self.gm_role:
+                overwrites[self.gm_role] = discord.PermissionOverwrite(view_channel=True)
+
+        await self.channel.edit(overwrites=overwrites)
+
+        access_text = "только ГМ может писать, остальные — только просмотр" if self.gm_only else "могут писать все участники"
+        await interaction.followup.send(f"Доступ для {self.channel.mention} обновлён: {access_text}.")
+        self.stop()
+
+    @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Изменение доступа отменено.", view=None)
+        self.stop()
 
 class Campaigns(commands.Cog):
     def __init__(self, bot: commands.Bot):
