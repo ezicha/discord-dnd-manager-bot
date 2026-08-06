@@ -6,7 +6,7 @@ import asyncio
 
 import logging
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO) # DEBUG, INFO, WARNING, ERROR
 logger = logging.getLogger("argus")
 
 load_dotenv()
@@ -39,6 +39,7 @@ async def main():
     async with bot:
         await bot.load_extension("cogs.campaigns")
         await bot.load_extension("cogs.dice")
+        await bot.load_extension("cogs.housekeeping")
         await bot.start(TOKEN)
 
 asyncio.run(main())
