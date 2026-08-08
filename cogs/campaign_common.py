@@ -108,6 +108,26 @@ async def archive_channel(guild, channel, archive_category, prefix, campaign_rol
     await channel.edit(overwrites=overwrites)
     return channel
 
+async def resurrect_channel(guild, channel, category, campaign_role, gm_role):
+    """
+    Возвращает один заархивированный канал обратно в категорию кампании
+    и восстанавливает обычный доступ (писать могут все участники кампании).
+ 
+    Индивидуальные настройки доступа канала (например «только ГМ»), если они
+    были у него до архивации, не сохраняются — при необходимости их можно
+    заново включить через /campaign_edit → «Изменить доступ». Название канала
+    (вместе с префиксом архивации) тоже не меняется — переименовать его можно
+    там же, через «Редактировать канал».
+    """
+    overwrites = channel.overwrites
+    overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
+    if campaign_role:
+        overwrites[campaign_role] = discord.PermissionOverwrite(view_channel=True)
+    if gm_role:
+        overwrites[gm_role] = discord.PermissionOverwrite(view_channel=True, manage_channels=True)
+    await channel.edit(category=category, overwrites=overwrites, sync_permissions=False)
+    return channel
+
 
 def get_gm_campaigns(guild: discord.Guild, member: discord.Member) -> dict:
     """
@@ -122,4 +142,37 @@ def get_gm_campaigns(guild: discord.Guild, member: discord.Member) -> dict:
         if category:
             campaign_role = discord.utils.get(guild.roles, name=campaign_name)
             campaigns[campaign_name] = (category, campaign_role, role)
+    return campaigns
+
+def get_gm_archived_campaigns(guild: discord.Guild, member: discord.Member) -> dict:
+    """
+    Возвращает словарь заархивированных кампаний, где member является ГМом:
+    { "Название кампании": (campaign_role, gm_role, [заархивированные каналы]) }
+ 
+    Кампания считается заархивированной, если у ГМа есть роль "ГМ: <название>",
+    активной категории с таким названием сейчас не существует, а в категории
+    "Архив" есть хотя бы один канал с правами доступа, выставленными именно
+    для роли участника или роли ГМа этой кампании. Поиск идёт по правам
+    доступа, а не по названию канала — префикс архивации вводится вручную
+    и не обязан совпадать с названием кампании, так что имени канала
+    доверять нельзя.
+    """
+    archive_category = discord.utils.get(guild.categories, name=ARCHIVE_CATEGORY_NAME)
+    gm_roles = [r for r in member.roles if r.name.startswith(GM_ROLE_PREFIX)]
+    campaigns = {}
+    for role in gm_roles:
+        campaign_name = role.name.removeprefix(GM_ROLE_PREFIX)
+        if discord.utils.get(guild.categories, name=campaign_name):
+            continue  # кампания активна, а не заархивирована
+ 
+        campaign_role = discord.utils.get(guild.roles, name=campaign_name)
+ 
+        archived_channels = []
+        if archive_category:
+            for ch in archive_category.channels:
+                if role in ch.overwrites or (campaign_role and campaign_role in ch.overwrites):
+                    archived_channels.append(ch)
+ 
+        if archived_channels:
+            campaigns[campaign_name] = (campaign_role, role, archived_channels)
     return campaigns
