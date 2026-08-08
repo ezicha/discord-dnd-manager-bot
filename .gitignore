@@ -3,3 +3,5 @@
 .env
 __pycache__/
 *.db
+deploy_listener.txt
+deploysh.txt
