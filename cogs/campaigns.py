@@ -7,6 +7,10 @@ from discord.ext import commands
 def slugify(name: str) -> str:
     return name.lower().replace(" ", "-")
 
+async def move_archive_to_end(guild: discord.Guild):
+    archive_category = discord.utils.get(guild.categories, name="Архив")
+    if archive_category:
+        await archive_category.move(end=True)
 
 async def archive_channel(guild, channel, archive_category, prefix, campaign_role, gm_role):
     """
@@ -134,6 +138,7 @@ class CampaignPlayersView(discord.ui.View):
         }
 
         category = await guild.create_category(name=name, overwrites=overwrites)
+        await move_archive_to_end(guild)
 
         text_channel = None
         if self.text_channel_name:
