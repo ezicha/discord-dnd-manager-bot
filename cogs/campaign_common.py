@@ -14,12 +14,26 @@ def slugify(name: str) -> str:
     return name.lower().replace(" ", "-")
 
 
+def channel_select_option(ch: discord.abc.GuildChannel) -> discord.SelectOption:
+    """
+    Собирает SelectOption для одного канала с явным различением войса и
+    текста (эмодзи + подпись) — нужно, чтобы каналы с одинаковым названием
+    не путались в select-меню.
+    """
+    return discord.SelectOption(
+        label=ch.name,
+        value=str(ch.id),
+        description="Голосовой канал" if isinstance(ch, discord.VoiceChannel) else "Текстовый канал",
+        emoji="🔊" if isinstance(ch, discord.VoiceChannel) else "#️⃣",
+    )
+
+
 def channel_options(category: discord.CategoryChannel) -> list[discord.SelectOption]:
     """
     Собирает список SelectOption из каналов категории.
     Используется во всех select-меню "выбери канал из категории".
     """
-    return [discord.SelectOption(label=ch.name, value=str(ch.id)) for ch in category.channels]
+    return [channel_select_option(ch) for ch in category.channels]
 
 
 def build_access_overwrites(

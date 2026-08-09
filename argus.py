@@ -40,6 +40,7 @@ async def main():
         await bot.load_extension("cogs.campaigns")
         await bot.load_extension("cogs.dice")
         await bot.load_extension("cogs.housekeeping")
+        await bot.load_extension("cogs.campaign_devtool")
         await bot.start(TOKEN)
 
 asyncio.run(main())
