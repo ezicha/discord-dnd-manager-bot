@@ -4,45 +4,51 @@ from .campaign_common import (
     ARCHIVE_CATEGORY_NAME,
     archive_channel,
     channel_options,
+    deliver_result,
     get_or_create_archive_category,
     logger,
     slugify,
+    build_select_options
 )
 
 
 # --- Архивация одной/нескольких кампаний целиком ---
 
 class ArchiveSelectView(discord.ui.View):
+    # Модальное окно с префиксами (ArchivePrefixModal) даёт по одному текстовому полю
+    # на кампанию, а Discord не позволяет больше 5 полей в одной модалке — поэтому
+    # за раз нельзя архивировать больше 5 кампаний.
+    MAX_CAMPAIGNS_PER_BATCH = 5
+ 
     def __init__(self, campaigns: dict):
         super().__init__(timeout=120)
         self.campaigns = campaigns
         self.chosen_names: list[str] = []
-
-        options = [discord.SelectOption(label=name) for name in campaigns.keys()]
+ 
+        names = list(campaigns.keys())
+        options, truncated = build_select_options(names)
         self.select_campaigns.options = options
-        self.select_campaigns.max_values = len(options)
-
+        self.select_campaigns.max_values = min(len(options), self.MAX_CAMPAIGNS_PER_BATCH)
+ 
+        placeholder = f"Выбери кампании для архивации (максимум {self.MAX_CAMPAIGNS_PER_BATCH} за раз)"
+        if truncated:
+            placeholder += f" — показаны первые {len(options)} из {len(names)}"
+        self.select_campaigns.placeholder = placeholder
+ 
     @discord.ui.select(placeholder="Выбери кампании для архивации", min_values=1)
     async def select_campaigns(self, interaction: discord.Interaction, select: discord.ui.Select):
         self.chosen_names = select.values
         await interaction.response.defer()
-
+ 
     @discord.ui.button(label="Архивировать выбранное", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.chosen_names:
             await interaction.response.send_message("Сначала выбери хотя бы одну кампанию.", ephemeral=True)
             return
-
-        if len(self.chosen_names) > 5:
-            await interaction.response.send_message(
-                "За один раз можно ввести префиксы максимум для 5 кампаний "
-                "(ограничение формы Discord). Выбери 5 или меньше.", ephemeral=True
-            )
-            return
-
+ 
         modal = ArchivePrefixModal(self.campaigns, self.chosen_names)
         await interaction.response.send_modal(modal)
-
+ 
     @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(content="Архивация отменена.", view=None)
@@ -73,6 +79,7 @@ class ArchivePrefixModal(discord.ui.Modal, title="Префиксы для арх
         archive_category = await get_or_create_archive_category(guild)
 
         archived_summary = []
+        all_moved_channels = []
 
         try:
             for chosen_name in self.chosen_names:
@@ -85,16 +92,19 @@ class ArchivePrefixModal(discord.ui.Modal, title="Префиксы для арх
                     moved_channels.append(channel)
 
                 await category.delete()
+                all_moved_channels.extend(moved_channels)
 
                 channels_text = ", ".join(ch.mention for ch in moved_channels) or "каналов не было"
                 archived_summary.append(f"**{chosen_name}** (префикс `{prefix}`): {channels_text}")
 
-            await interaction.followup.send("Заархивировано:\n" + "\n".join(archived_summary))
+            message = "Заархивировано:\n" + "\n".join(archived_summary)
+            await deliver_result(interaction, all_moved_channels, message)
         except Exception as e:
             logger.error("Ошибка при архивации: %s", repr(e))
             done_text = "\n".join(archived_summary) if archived_summary else "ничего не успело обработаться"
             await interaction.followup.send(
-                f"Что-то пошло не так во время архивации.\nУспело обработаться:\n{done_text}\nОшибка: {e}"
+                f"Что-то пошло не так во время архивации.\nУспело обработаться:\n{done_text}\nОшибка: {e}",
+                ephemeral=True
             )
 
 
@@ -145,18 +155,27 @@ class SingleArchivePrefixModal(discord.ui.Modal, title="Префикс для а
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
-
+ 
         archive_category = await get_or_create_archive_category(guild)
-
+ 
         prefix = self.prefix.value.strip() or slugify(self.campaign_name)
         moved = []
-
-        for channel_id in self.chosen_channel_ids:
-            channel = guild.get_channel(int(channel_id))
-            if channel is None:
-                continue
-            await archive_channel(guild, channel, archive_category, prefix, self.campaign_role, self.gm_role)
-            moved.append(channel)
-
-        moved_text = ", ".join(ch.mention for ch in moved) or "ничего не перенесено"
-        await interaction.followup.send(f"Каналы перенесены в **{ARCHIVE_CATEGORY_NAME}** с префиксом `{prefix}`: {moved_text}")
+ 
+        try:
+            for channel_id in self.chosen_channel_ids:
+                channel = guild.get_channel(int(channel_id))
+                if channel is None:
+                    continue
+                await archive_channel(guild, channel, archive_category, prefix, self.campaign_role, self.gm_role)
+                moved.append(channel)
+ 
+            moved_text = ", ".join(ch.mention for ch in moved) or "ничего не перенесено"
+            message = f"Каналы перенесены в **{ARCHIVE_CATEGORY_NAME}** с префиксом `{prefix}`: {moved_text}"
+            await deliver_result(interaction, moved, message)
+        except Exception as e:
+            logger.error("Ошибка при архивации каналов: %s", repr(e))
+            done_text = ", ".join(ch.mention for ch in moved) or "ничего не успело перенестись"
+            await interaction.followup.send(
+                f"Что-то пошло не так при архивации.\nУспело обработаться: {done_text}\nОшибка: {e}",
+                ephemeral=True
+            )

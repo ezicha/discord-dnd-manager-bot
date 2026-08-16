@@ -1,27 +1,27 @@
 import discord
 
-from .campaign_common import GM_ROLE_PREFIX, move_archive_to_end
+from .campaign_common import GM_ROLE_PREFIX, deliver_result, move_archive_to_end
 
 
 class CampaignModal(discord.ui.Modal, title = "Новая кампания"):
     campaign_name  =  discord.ui.TextInput(
         label = "Название кампании",
         placeholder = "Например: Проклятие Страда",
-        max_length = 100
+        max_length = 30
     )
 
     text_channel_name  =  discord.ui.TextInput(
         label = "Название текстового канала",
         placeholder = "Оставить это поле пустым, если канал не нужен",
         required = False,
-        max_length = 100
+        max_length = 30
     )
 
     voice_channel_name  =  discord.ui.TextInput(
         label = "Название голосового канала",
         placeholder = "Оставить это поле пустым, если канал не нужен",
         required = False,
-        max_length = 100
+        max_length = 30
     )
 
     text_channel_topic  =  discord.ui.TextInput(
@@ -121,12 +121,13 @@ class CampaignPlayersView(discord.ui.View):
             channels_list.append(voice_channel.mention)
         channels_text  =  ", ".join(channels_list) if channels_list else "не создано ни одного канала"
 
-        await interaction.followup.send(
+        summary = (
             f"Кампания **{name}** создана!\n"
             f"Роль: {campaign_role.mention}\n"
             f"Игроки: {players_list}\n"
             f"Каналы: {channels_text}"
         )
+        await deliver_result(interaction, [text_channel, voice_channel], summary)
         self.stop()
 
     @discord.ui.button(label = "Отмена", style = discord.ButtonStyle.secondary)

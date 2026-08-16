@@ -28,13 +28,34 @@ def channel_select_option(ch: discord.abc.GuildChannel) -> discord.SelectOption:
     )
 
 
-def channel_options(category: discord.CategoryChannel) -> list[discord.SelectOption]:
+# Discord ограничивает select-меню 25 опциями — это жёсткий лимит компонента,
+# превышение которого падает с ошибкой при создании View, а не мягким предупреждением.
+SELECT_OPTIONS_LIMIT = 25
+ 
+ 
+def channel_options(category: discord.CategoryChannel, limit: int = SELECT_OPTIONS_LIMIT) -> tuple[list[discord.SelectOption], bool]:
     """
-    Собирает список SelectOption из каналов категории.
+    Собирает список SelectOption из каналов категории (через channel_select_option,
+    чтобы у каждого канала было различение войс/текст), обрезая до limit.
     Используется во всех select-меню "выбери канал из категории".
+    Возвращает (options, truncated) — truncated=True, если каналов больше лимита
+    и часть из них не попала в список.
     """
-    return [channel_select_option(ch) for ch in category.channels]
-
+    channels = category.channels
+    truncated = len(channels) > limit
+    options = [channel_select_option(ch) for ch in channels[:limit]]
+    return options, truncated
+ 
+ 
+def build_select_options(labels: list[str], limit: int = SELECT_OPTIONS_LIMIT) -> tuple[list[discord.SelectOption], bool]:
+    """
+    Собирает список SelectOption из строковых меток (например, названий кампаний),
+    обрезая до limit. Возвращает (options, truncated) — как и channel_options.
+    """
+    truncated = len(labels) > limit
+    options = [discord.SelectOption(label=label) for label in labels[:limit]]
+    return options, truncated
+ 
 
 def build_access_overwrites(
     guild: discord.Guild,
@@ -142,6 +163,29 @@ async def resurrect_channel(guild, channel, category, campaign_role, gm_role):
     await channel.edit(category=category, overwrites=overwrites, sync_permissions=False)
     return channel
 
+async def deliver_result(interaction: discord.Interaction, channels: list, message: str, short_ack: str = "Готово.") -> None:
+    """
+    Отправляет итоговое сообщение о выполнении команды не в канал вызова команды,
+    а в затронутые текстовые каналы — в каждый из них, если их несколько
+    (голосовые каналы из списка просто игнорируются, в них нельзя писать текстом).
+    Взаимодействие при этом закрывается коротким приватным (ephemeral) подтверждением,
+    чтобы у вызвавшего не осталось висящего "бот думает...".
+ 
+    Если среди channels не нашлось ни одного текстового канала (например, у кампании
+    есть только голосовой канал) — само итоговое сообщение уходит вызвавшему как
+    ephemeral-ответ, короткое подтверждение в этом случае не отправляется.
+ 
+    Перед вызовом взаимодействие должно быть подтверждено через
+    interaction.response.defer(ephemeral=True).
+    """
+    text_channels = [ch for ch in channels if isinstance(ch, discord.TextChannel)]
+    if text_channels:
+        for ch in text_channels:
+            await ch.send(message)
+        await interaction.followup.send(short_ack, ephemeral=True)
+    else:
+        await interaction.followup.send(message, ephemeral=True)
+ 
 
 def get_gm_campaigns(guild: discord.Guild, member: discord.Member) -> dict:
     """

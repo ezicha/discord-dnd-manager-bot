@@ -1,6 +1,6 @@
 import discord
 
-from .campaign_common import GM_ROLE_PREFIX, logger, move_archive_to_end, resurrect_channel
+from .campaign_common import GM_ROLE_PREFIX, build_select_options, deliver_result, logger, move_archive_to_end, resurrect_channel
 
 
 # --- Выбор кампании для восстановления (если заархивированных кампаний несколько) ---
@@ -9,8 +9,13 @@ class ResurrectSelectView(discord.ui.View):
     def __init__(self, campaigns: dict):
         super().__init__(timeout=120)
         self.campaigns = campaigns
-        options = [discord.SelectOption(label=name) for name in campaigns.keys()]
+        names = list(campaigns.keys())
+        options, truncated = build_select_options(names)
         self.select_campaign.options = options
+        if truncated:
+            self.select_campaign.placeholder = (
+                f"Какую кампанию вернуть из архива? (показаны первые {len(options)} из {len(names)})"
+            )
 
     @discord.ui.select(placeholder="Какую кампанию вернуть из архива?")
     async def select_campaign(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -45,13 +50,15 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
         # Проверяем конфликты названия, если кампанию переименовывают
         if discord.utils.get(guild.categories, name=final_name):
             await interaction.followup.send(
-                f"Категория с названием **{final_name}** уже существует. Попробуй другое название."
+                f"Категория с названием **{final_name}** уже существует. Попробуй другое название.",
+                ephemeral=True
             )
             return
         existing_role = discord.utils.get(guild.roles, name=final_name)
         if existing_role and (self.campaign_role is None or existing_role.id != self.campaign_role.id):
             await interaction.followup.send(
-                f"Роль с названием **{final_name}** уже занята другой кампанией. Попробуй другое название."
+                f"Роль с названием **{final_name}** уже занята другой кампанией. Попробуй другое название.",
+                ephemeral=True
             )
             return
 
@@ -84,15 +91,17 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
                 restored.append(channel)
 
             restored_text = ", ".join(ch.mention for ch in restored) or "каналов не было"
-            await interaction.followup.send(
+            message = (
                 f"Кампания **{final_name}** возвращена из архива!\n"
                 f"Роль: {campaign_role.mention}\n"
                 f"Каналы: {restored_text}\n"
                 f"Названия каналов и индивидуальный доступ (например «только ГМ») из архива не восстанавливаются "
                 f"автоматически — поправить их можно через /campaign_edit."
             )
+            await deliver_result(interaction, restored, message)
         except Exception as e:
             logger.error("Ошибка при восстановлении кампании: %s", repr(e))
             await interaction.followup.send(
-                f"Что-то пошло не так при восстановлении кампании. Ошибка: {e}"
+                f"Что-то пошло не так при восстановлении кампании. Ошибка: {e}",
+                ephemeral=True
             )

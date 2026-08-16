@@ -1,7 +1,7 @@
 import discord
 
 from .campaign_archive import ArchiveSingleChannelView
-from .campaign_common import build_access_overwrites, channel_options, logger
+from .campaign_common import build_access_overwrites, build_select_options, channel_options, deliver_result, logger
 
 
 # --- Выбор кампании для редактирования (если их несколько) ---
@@ -10,8 +10,13 @@ class CampaignEditSelectView(discord.ui.View):
     def __init__(self, campaigns: dict):
         super().__init__(timeout=120)
         self.campaigns = campaigns
-        options = [discord.SelectOption(label=name) for name in campaigns.keys()]
+        names = list(campaigns.keys())
+        options, truncated = build_select_options(names)
         self.select_campaign.options = options
+        if truncated:
+            self.select_campaign.placeholder = (
+                f"Какую кампанию редактировать? (показаны первые {len(options)} из {len(names)})"
+            )
 
     @discord.ui.select(placeholder="Какую кампанию редактировать?")
     async def select_campaign(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -160,13 +165,13 @@ class AddChannelModal(discord.ui.Modal, title="Новый канал"):
                 )
 
             logger.debug("канал создан: %s", channel)
-            await interaction.followup.send(f"Канал {channel.mention} создан.")
+            await deliver_result(interaction, [channel], f"Канал {channel.mention} создан.")
             logger.debug("сообщение отправлено")
         except Exception as e:
             # Раньше здесь ошибка только логировалась, а пользователь не получал
             # никакого ответа — взаимодействие просто зависало. Теперь сообщаем и ему.
             logger.error("Ошибка при создании канала: %s", repr(e))
-            await interaction.followup.send(f"Не удалось создать канал. Ошибка: {e}")
+            await interaction.followup.send(f"Не удалось создать канал. Ошибка: {e}", ephemeral=True)
 
 
 # --- Переименование / изменение описания канала ---
@@ -175,7 +180,12 @@ class RenameChannelSelectView(discord.ui.View):
     def __init__(self, category):
         super().__init__(timeout=120)
         self.category = category
-        self.select_channel.options = channel_options(category)
+        options, truncated = channel_options(category)
+        self.select_channel.options = options
+        if truncated:
+            self.select_channel.placeholder = (
+                f"Какой канал изменить? (показаны первые {len(options)} из {len(category.channels)})"
+            )
 
     @discord.ui.select(placeholder="Какой канал изменить?")
     async def select_channel(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -202,11 +212,15 @@ class RenameChannelModal(discord.ui.Modal, title="Изменить канал"):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        if isinstance(self.channel, discord.TextChannel):
-            await self.channel.edit(name=self.new_name.value, topic=self.new_topic.value.strip() or None)
-        else:
-            await self.channel.edit(name=self.new_name.value)
-        await interaction.followup.send(f"Канал {self.channel.mention} обновлён.")
+        try:
+            if isinstance(self.channel, discord.TextChannel):
+                await self.channel.edit(name=self.new_name.value, topic=self.new_topic.value.strip() or None)
+            else:
+                await self.channel.edit(name=self.new_name.value)
+            await deliver_result(interaction, [self.channel], f"Канал {self.channel.mention} обновлён.")
+        except Exception as e:
+            logger.error("Ошибка при редактировании канала: %s", repr(e))
+            await interaction.followup.send(f"Не удалось изменить канал. Ошибка: {e}", ephemeral=True)
 
 
 # --- Изменение доступа существующего канала ---
@@ -217,7 +231,12 @@ class ChannelAccessSelectView(discord.ui.View):
         self.category = category
         self.campaign_role = campaign_role
         self.gm_role = gm_role
-        self.select_channel.options = channel_options(category)
+        options, truncated = channel_options(category)
+        self.select_channel.options = options
+        if truncated:
+            self.select_channel.placeholder = (
+                f"Какому каналу изменить доступ? (показаны первые {len(options)} из {len(category.channels)})"
+            )
 
     @discord.ui.select(placeholder="Какому каналу изменить доступ?")
     async def select_channel(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -250,15 +269,19 @@ class ChangeAccessApplyView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
 
-        is_voice = isinstance(self.channel, discord.VoiceChannel)
-        overwrites = build_access_overwrites(
-            guild, self.campaign_role, self.gm_role, self.gm_only, is_voice,
-            base_overwrites=self.channel.overwrites,
-        )
-        await self.channel.edit(overwrites=overwrites)
+        try:
+            is_voice = isinstance(self.channel, discord.VoiceChannel)
+            overwrites = build_access_overwrites(
+                guild, self.campaign_role, self.gm_role, self.gm_only, is_voice,
+                base_overwrites=self.channel.overwrites,
+            )
+            await self.channel.edit(overwrites=overwrites)
 
-        access_text = "только ГМ может писать, остальные — только просмотр" if self.gm_only else "могут писать все участники"
-        await interaction.followup.send(f"Доступ для {self.channel.mention} обновлён: {access_text}.")
+            access_text = "только ГМ может писать, остальные — только просмотр" if self.gm_only else "могут писать все участники"
+            await deliver_result(interaction, [self.channel], f"Доступ для {self.channel.mention} обновлён: {access_text}.")
+        except Exception as e:
+            logger.error("Ошибка при изменении доступа: %s", repr(e))
+            await interaction.followup.send(f"Не удалось изменить доступ. Ошибка: {e}", ephemeral=True)
         self.stop()
 
     @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
