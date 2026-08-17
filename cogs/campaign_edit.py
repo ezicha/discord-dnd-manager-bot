@@ -1,7 +1,17 @@
 import discord
 
 from .campaign_archive import ArchiveSingleChannelView
-from .campaign_common import build_access_overwrites, build_select_options, channel_options, deliver_result, logger
+from .campaign_common import (
+    SELECT_OPTIONS_LIMIT,
+    build_access_overwrites,
+    build_select_options,
+    channel_options,
+    channel_select_option,
+    deliver_result,
+    get_archived_channels_for_campaign,
+    logger,
+    resurrect_channel,
+)
 
 
 # --- Выбор кампании для редактирования (если их несколько) ---
@@ -52,6 +62,15 @@ class CampaignEditMenuView(discord.ui.View):
         view = ArchiveSingleChannelView(self.campaign_name, self.category, self.campaign_role, self.gm_role)
         await interaction.response.edit_message(content="Выбери каналы для архивации:", view=view)
 
+    @discord.ui.button(label="Восстановить канал", style=discord.ButtonStyle.success)
+    async def restore_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        archived_channels = get_archived_channels_for_campaign(interaction.guild, self.campaign_role, self.gm_role)
+        if not archived_channels:
+            await interaction.response.send_message("В архиве нет каналов этой кампании.", ephemeral=True)
+            return
+        view = RestoreChannelSelectView(self.category, self.campaign_role, self.gm_role, archived_channels)
+        await interaction.response.edit_message(content="Выбери каналы, которые вернуть из архива:", view=view)
+
     @discord.ui.button(label="Редактировать канал", style=discord.ButtonStyle.primary)
     async def rename_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         channels = self.category.channels
@@ -73,6 +92,69 @@ class CampaignEditMenuView(discord.ui.View):
     @discord.ui.button(label="Закрыть", style=discord.ButtonStyle.secondary)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(content="Меню редактирования закрыто.", view=None)
+        self.stop()
+
+
+# --- Восстановление точечно заархивированных каналов кампании ---
+# (для случая, когда кампания активна, а один из её каналов заранее
+# заархивировали отдельно через кнопку «Архивировать канал» выше)
+
+class RestoreChannelSelectView(discord.ui.View):
+    def __init__(self, category, campaign_role, gm_role, archived_channels: list):
+        super().__init__(timeout=120)
+        self.category = category
+        self.campaign_role = campaign_role
+        self.gm_role = gm_role
+        self.chosen_channels = []
+
+        truncated = len(archived_channels) > SELECT_OPTIONS_LIMIT
+        shown = archived_channels[:SELECT_OPTIONS_LIMIT]
+        options = [channel_select_option(ch) for ch in shown]
+        self.select_channels.options = options
+        self.select_channels.max_values = len(options)
+        if truncated:
+            self.select_channels.placeholder = (
+                f"Какие каналы вернуть из архива? (показаны первые {len(shown)} из {len(archived_channels)})"
+            )
+
+    @discord.ui.select(placeholder="Какие каналы вернуть из архива?", min_values=1)
+    async def select_channels(self, interaction: discord.Interaction, select: discord.ui.Select):
+        self.chosen_channels = select.values
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Восстановить выбранное", style=discord.ButtonStyle.success)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.chosen_channels:
+            await interaction.response.send_message("Сначала выбери хотя бы один канал.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+        restored = []
+
+        try:
+            for channel_id in self.chosen_channels:
+                channel = guild.get_channel(int(channel_id))
+                if channel is None:
+                    continue
+                await resurrect_channel(guild, channel, self.category, self.campaign_role, self.gm_role)
+                restored.append(channel)
+
+            restored_text = ", ".join(ch.mention for ch in restored) or "ничего не восстановлено"
+            message = f"Каналы возвращены в кампанию: {restored_text}"
+            await deliver_result(interaction, restored, message)
+        except Exception as e:
+            logger.error("Ошибка при восстановлении каналов: %s", repr(e))
+            done_text = ", ".join(ch.mention for ch in restored) or "ничего не успело восстановиться"
+            await interaction.followup.send(
+                f"Что-то пошло не так при восстановлении.\nУспело обработаться: {done_text}\nОшибка: {e}",
+                ephemeral=True
+            )
+        self.stop()
+
+    @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Восстановление отменено.", view=None)
         self.stop()
 
 

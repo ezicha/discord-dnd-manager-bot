@@ -31,8 +31,8 @@ def channel_select_option(ch: discord.abc.GuildChannel) -> discord.SelectOption:
 # Discord ограничивает select-меню 25 опциями — это жёсткий лимит компонента,
 # превышение которого падает с ошибкой при создании View, а не мягким предупреждением.
 SELECT_OPTIONS_LIMIT = 25
- 
- 
+
+
 def channel_options(category: discord.CategoryChannel, limit: int = SELECT_OPTIONS_LIMIT) -> tuple[list[discord.SelectOption], bool]:
     """
     Собирает список SelectOption из каналов категории (через channel_select_option,
@@ -45,8 +45,8 @@ def channel_options(category: discord.CategoryChannel, limit: int = SELECT_OPTIO
     truncated = len(channels) > limit
     options = [channel_select_option(ch) for ch in channels[:limit]]
     return options, truncated
- 
- 
+
+
 def build_select_options(labels: list[str], limit: int = SELECT_OPTIONS_LIMIT) -> tuple[list[discord.SelectOption], bool]:
     """
     Собирает список SelectOption из строковых меток (например, названий кампаний),
@@ -55,7 +55,7 @@ def build_select_options(labels: list[str], limit: int = SELECT_OPTIONS_LIMIT) -
     truncated = len(labels) > limit
     options = [discord.SelectOption(label=label) for label in labels[:limit]]
     return options, truncated
- 
+
 
 def build_access_overwrites(
     guild: discord.Guild,
@@ -147,7 +147,7 @@ async def resurrect_channel(guild, channel, category, campaign_role, gm_role):
     """
     Возвращает один заархивированный канал обратно в категорию кампании
     и восстанавливает обычный доступ (писать могут все участники кампании).
- 
+
     Индивидуальные настройки доступа канала (например «только ГМ»), если они
     были у него до архивации, не сохраняются — при необходимости их можно
     заново включить через /campaign_edit → «Изменить доступ». Название канала
@@ -170,11 +170,11 @@ async def deliver_result(interaction: discord.Interaction, channels: list, messa
     (голосовые каналы из списка просто игнорируются, в них нельзя писать текстом).
     Взаимодействие при этом закрывается коротким приватным (ephemeral) подтверждением,
     чтобы у вызвавшего не осталось висящего "бот думает...".
- 
+
     Если среди channels не нашлось ни одного текстового канала (например, у кампании
     есть только голосовой канал) — само итоговое сообщение уходит вызвавшему как
     ephemeral-ответ, короткое подтверждение в этом случае не отправляется.
- 
+
     Перед вызовом взаимодействие должно быть подтверждено через
     interaction.response.defer(ephemeral=True).
     """
@@ -185,7 +185,7 @@ async def deliver_result(interaction: discord.Interaction, channels: list, messa
         await interaction.followup.send(short_ack, ephemeral=True)
     else:
         await interaction.followup.send(message, ephemeral=True)
- 
+
 
 def get_gm_campaigns(guild: discord.Guild, member: discord.Member) -> dict:
     """
@@ -202,11 +202,29 @@ def get_gm_campaigns(guild: discord.Guild, member: discord.Member) -> dict:
             campaigns[campaign_name] = (category, campaign_role, role)
     return campaigns
 
+def get_archived_channels_for_campaign(guild: discord.Guild, campaign_role, gm_role) -> list:
+    """
+    Возвращает список каналов в категории "Архив", принадлежащих конкретной
+    кампании — по правам доступа, выставленным на них для campaign_role/gm_role
+    (тот же принцип поиска, что и в get_gm_archived_campaigns). В отличие от неё,
+    не проверяет, жива ли сейчас активная категория кампании — нужна именно для
+    случая, когда кампания активна, а один канал из неё заранее заархивировали
+    отдельно через /campaign_edit → «Архивировать канал».
+    """
+    archive_category = discord.utils.get(guild.categories, name=ARCHIVE_CATEGORY_NAME)
+    if not archive_category:
+        return []
+    return [
+        ch for ch in archive_category.channels
+        if (gm_role and gm_role in ch.overwrites) or (campaign_role and campaign_role in ch.overwrites)
+    ]
+
+
 def get_gm_archived_campaigns(guild: discord.Guild, member: discord.Member) -> dict:
     """
     Возвращает словарь заархивированных кампаний, где member является ГМом:
     { "Название кампании": (campaign_role, gm_role, [заархивированные каналы]) }
- 
+
     Кампания считается заархивированной, если у ГМа есть роль "ГМ: <название>",
     активной категории с таким названием сейчас не существует, а в категории
     "Архив" есть хотя бы один канал с правами доступа, выставленными именно
@@ -215,22 +233,16 @@ def get_gm_archived_campaigns(guild: discord.Guild, member: discord.Member) -> d
     и не обязан совпадать с названием кампании, так что имени канала
     доверять нельзя.
     """
-    archive_category = discord.utils.get(guild.categories, name=ARCHIVE_CATEGORY_NAME)
     gm_roles = [r for r in member.roles if r.name.startswith(GM_ROLE_PREFIX)]
     campaigns = {}
     for role in gm_roles:
         campaign_name = role.name.removeprefix(GM_ROLE_PREFIX)
         if discord.utils.get(guild.categories, name=campaign_name):
             continue  # кампания активна, а не заархивирована
- 
+
         campaign_role = discord.utils.get(guild.roles, name=campaign_name)
- 
-        archived_channels = []
-        if archive_category:
-            for ch in archive_category.channels:
-                if role in ch.overwrites or (campaign_role and campaign_role in ch.overwrites):
-                    archived_channels.append(ch)
- 
+        archived_channels = get_archived_channels_for_campaign(guild, campaign_role, role)
+
         if archived_channels:
             campaigns[campaign_name] = (campaign_role, role, archived_channels)
     return campaigns
