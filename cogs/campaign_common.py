@@ -143,16 +143,19 @@ async def archive_channel(guild, channel, archive_category, prefix, campaign_rol
     await channel.edit(overwrites=overwrites)
     return channel
 
-async def resurrect_channel(guild, channel, category, campaign_role, gm_role):
+async def resurrect_channel(guild, channel, category, campaign_role, gm_role, new_name: str | None = None):
     """
     Возвращает один заархивированный канал обратно в категорию кампании
     и восстанавливает обычный доступ (писать могут все участники кампании).
 
     Индивидуальные настройки доступа канала (например «только ГМ»), если они
     были у него до архивации, не сохраняются — при необходимости их можно
-    заново включить через /campaign_edit → «Изменить доступ». Название канала
-    (вместе с префиксом архивации) тоже не меняется — переименовать его можно
-    там же, через «Редактировать канал».
+    заново включить через /campaign_edit → «Изменить доступ».
+
+    Если передан new_name (и он отличается от текущего) — канал заодно
+    переименовывается тем же вызовом edit(), без отдельного запроса к API.
+    Если new_name не передан или пуст — имя (вместе с префиксом архивации)
+    остаётся как есть, переименовать его потом можно через «Редактировать канал».
     """
     overwrites = channel.overwrites
     overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
@@ -160,7 +163,12 @@ async def resurrect_channel(guild, channel, category, campaign_role, gm_role):
         overwrites[campaign_role] = discord.PermissionOverwrite(view_channel=True)
     if gm_role:
         overwrites[gm_role] = discord.PermissionOverwrite(view_channel=True, manage_channels=True)
-    await channel.edit(category=category, overwrites=overwrites, sync_permissions=False)
+
+    edit_kwargs = dict(category=category, overwrites=overwrites, sync_permissions=False)
+    if new_name and new_name != channel.name:
+        edit_kwargs["name"] = new_name
+
+    await channel.edit(**edit_kwargs)
     return channel
 
 async def deliver_result(interaction: discord.Interaction, channels: list, message: str, short_ack: str = "Готово.") -> None:

@@ -5,7 +5,7 @@ from .campaign_archive import ArchiveSelectView
 from .campaign_common import get_gm_archived_campaigns, get_gm_campaigns
 from .campaign_create import CampaignModal
 from .campaign_edit import CampaignEditMenuView, CampaignEditSelectView
-from .campaign_resurrect import ResurrectModal, ResurrectSelectView
+from .campaign_resurrect import MAX_CHANNELS_FOR_RENAME, ResurrectChannelPickView, ResurrectModal, ResurrectSelectView
 
 
 class Campaigns(commands.Cog):
@@ -70,8 +70,19 @@ class Campaigns(commands.Cog):
 
         if len(campaigns) == 1:
             name, (campaign_role, gm_role, channels) = next(iter(campaigns.items()))
-            modal = ResurrectModal(name, campaign_role, gm_role, channels)
-            await interaction.response.send_modal(modal)
+            if len(channels) > MAX_CHANNELS_FOR_RENAME:
+                view = ResurrectChannelPickView(name, campaign_role, gm_role, channels)
+                await interaction.response.send_message(
+                    f"У кампании **{name}** больше {MAX_CHANNELS_FOR_RENAME} заархивированных каналов — "
+                    f"переименовать сразу можно не больше {MAX_CHANNELS_FOR_RENAME} за раз (лимит полей в модалке Discord, "
+                    f"одно из них уже занято под название кампании). Выбери, какие каналы переименовать сейчас — "
+                    f"остальные вернутся с прежним названием, поправить его потом можно через /campaign_edit. "
+                    f"Восстановлены при этом будут все каналы, независимо от выбора здесь.",
+                    view=view, ephemeral=True
+                )
+            else:
+                modal = ResurrectModal(name, campaign_role, gm_role, channels)
+                await interaction.response.send_modal(modal)
         else:
             view = ResurrectSelectView(campaigns)
             await interaction.response.send_message(

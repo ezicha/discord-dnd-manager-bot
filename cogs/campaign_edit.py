@@ -100,22 +100,29 @@ class CampaignEditMenuView(discord.ui.View):
 # заархивировали отдельно через кнопку «Архивировать канал» выше)
 
 class RestoreChannelSelectView(discord.ui.View):
+    # Дальше открывается модалка с одним полем переименования на канал —
+    # Discord не даёт больше 5 полей в одной модалке, поэтому и восстановить
+    # с переименованием за раз можно не больше 5 каналов.
+    MAX_CHANNELS_PER_BATCH = 5
+
     def __init__(self, category, campaign_role, gm_role, archived_channels: list):
         super().__init__(timeout=120)
         self.category = category
         self.campaign_role = campaign_role
         self.gm_role = gm_role
+        self.archived_channels = archived_channels
         self.chosen_channels = []
 
         truncated = len(archived_channels) > SELECT_OPTIONS_LIMIT
         shown = archived_channels[:SELECT_OPTIONS_LIMIT]
         options = [channel_select_option(ch) for ch in shown]
         self.select_channels.options = options
-        self.select_channels.max_values = len(options)
+        self.select_channels.max_values = min(len(options), self.MAX_CHANNELS_PER_BATCH)
+
+        placeholder = f"Какие каналы вернуть из архива? (максимум {self.MAX_CHANNELS_PER_BATCH} за раз)"
         if truncated:
-            self.select_channels.placeholder = (
-                f"Какие каналы вернуть из архива? (показаны первые {len(shown)} из {len(archived_channels)})"
-            )
+            placeholder += f" — показаны первые {len(shown)} из {len(archived_channels)}"
+        self.select_channels.placeholder = placeholder
 
     @discord.ui.select(placeholder="Какие каналы вернуть из архива?", min_values=1)
     async def select_channels(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -128,16 +135,52 @@ class RestoreChannelSelectView(discord.ui.View):
             await interaction.response.send_message("Сначала выбери хотя бы один канал.", ephemeral=True)
             return
 
+        chosen_ids = set(self.chosen_channels)
+        channels = [ch for ch in self.archived_channels if str(ch.id) in chosen_ids]
+        modal = RestoreChannelRenameModal(self.category, self.campaign_role, self.gm_role, channels)
+        await interaction.response.send_modal(modal)
+        self.stop()
+
+    @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Восстановление отменено.", view=None)
+        self.stop()
+
+
+class RestoreChannelRenameModal(discord.ui.Modal, title="Вернуть каналы из архива"):
+    """
+    По одному полю на каждый выбранный канал — по умолчанию текущее (архивное,
+    с префиксом) название, можно сразу поправить прямо тут при восстановлении.
+    """
+    def __init__(self, category, campaign_role, gm_role, channels: list):
+        super().__init__()
+        self.category = category
+        self.campaign_role = campaign_role
+        self.gm_role = gm_role
+        self.channels = channels
+        self.name_inputs: dict[int, discord.ui.TextInput] = {}
+
+        for ch in channels:
+            field = discord.ui.TextInput(
+                label=f"Название канала «{ch.name}»"[:45],
+                default=ch.name,
+                max_length=100,
+            )
+            self.name_inputs[ch.id] = field
+            self.add_item(field)
+
+    async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
         restored = []
 
         try:
-            for channel_id in self.chosen_channels:
-                channel = guild.get_channel(int(channel_id))
-                if channel is None:
-                    continue
-                await resurrect_channel(guild, channel, self.category, self.campaign_role, self.gm_role)
+            for channel in self.channels:
+                field = self.name_inputs.get(channel.id)
+                new_name = field.value.strip() if field else None
+                await resurrect_channel(
+                    guild, channel, self.category, self.campaign_role, self.gm_role, new_name=new_name
+                )
                 restored.append(channel)
 
             restored_text = ", ".join(ch.mention for ch in restored) or "ничего не восстановлено"
@@ -150,12 +193,6 @@ class RestoreChannelSelectView(discord.ui.View):
                 f"Что-то пошло не так при восстановлении.\nУспело обработаться: {done_text}\nОшибка: {e}",
                 ephemeral=True
             )
-        self.stop()
-
-    @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="Восстановление отменено.", view=None)
-        self.stop()
 
 
 # --- Добавление канала: тип + доступ ---

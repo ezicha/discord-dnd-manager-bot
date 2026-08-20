@@ -1,6 +1,19 @@
 import discord
 
-from .campaign_common import GM_ROLE_PREFIX, build_select_options, deliver_result, logger, move_archive_to_end, resurrect_channel
+from .campaign_common import (
+    GM_ROLE_PREFIX,
+    SELECT_OPTIONS_LIMIT,
+    build_select_options,
+    channel_select_option,
+    deliver_result,
+    logger,
+    move_archive_to_end,
+    resurrect_channel,
+)
+
+# Поле "Название кампании" всегда занимает один из 5 слотов модалки Discord —
+# на переименование отдельных каналов остаётся максимум 4.
+MAX_CHANNELS_FOR_RENAME = 4
 
 
 # --- Выбор кампании для восстановления (если заархивированных кампаний несколько) ---
@@ -21,8 +34,71 @@ class ResurrectSelectView(discord.ui.View):
     async def select_campaign(self, interaction: discord.Interaction, select: discord.ui.Select):
         chosen_name = select.values[0]
         campaign_role, gm_role, channels = self.campaigns[chosen_name]
-        modal = ResurrectModal(chosen_name, campaign_role, gm_role, channels)
+
+        if len(channels) > MAX_CHANNELS_FOR_RENAME:
+            view = ResurrectChannelPickView(chosen_name, campaign_role, gm_role, channels)
+            await interaction.response.edit_message(
+                content=(
+                    f"У кампании **{chosen_name}** больше {MAX_CHANNELS_FOR_RENAME} заархивированных каналов — "
+                    f"переименовать сразу можно не больше {MAX_CHANNELS_FOR_RENAME} за раз (лимит полей в модалке Discord, "
+                    f"одно из них уже занято под название кампании). Выбери, какие каналы переименовать сейчас — "
+                    f"остальные вернутся с прежним названием, поправить его потом можно через /campaign_edit. "
+                    f"Восстановлены при этом будут все каналы, независимо от выбора здесь."
+                ),
+                view=view,
+            )
+        else:
+            modal = ResurrectModal(chosen_name, campaign_role, gm_role, channels)
+            await interaction.response.send_modal(modal)
+
+
+class ResurrectChannelPickView(discord.ui.View):
+    """
+    Показывается, только когда у кампании больше MAX_CHANNELS_FOR_RENAME
+    заархивированных каналов. Восстанавливаются всегда ВСЕ каналы кампании —
+    этот выбор влияет только на то, каким из них дать поле переименования
+    в следующей модалке (лимит — 5 полей на модалку, одно уже занято
+    под название кампании).
+    """
+    def __init__(self, campaign_name: str, campaign_role, gm_role, channels: list):
+        super().__init__(timeout=120)
+        self.campaign_name = campaign_name
+        self.campaign_role = campaign_role
+        self.gm_role = gm_role
+        self.channels = channels
+        self.chosen_channels: list[str] = []
+
+        truncated = len(channels) > SELECT_OPTIONS_LIMIT
+        shown = channels[:SELECT_OPTIONS_LIMIT]
+        options = [channel_select_option(ch) for ch in shown]
+        self.select_channels.options = options
+        self.select_channels.max_values = min(len(options), MAX_CHANNELS_FOR_RENAME)
+
+        placeholder = f"Какие каналы переименовать? (максимум {MAX_CHANNELS_FOR_RENAME})"
+        if truncated:
+            placeholder += f" — показаны первые {len(shown)} из {len(channels)}"
+        self.select_channels.placeholder = placeholder
+
+    @discord.ui.select(placeholder="Какие каналы переименовать?", min_values=0)
+    async def select_channels(self, interaction: discord.Interaction, select: discord.ui.Select):
+        self.chosen_channels = select.values
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Продолжить", style=discord.ButtonStyle.success)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        chosen_ids = set(self.chosen_channels)
+        rename_channels = [ch for ch in self.channels if str(ch.id) in chosen_ids]
+        modal = ResurrectModal(
+            self.campaign_name, self.campaign_role, self.gm_role, self.channels,
+            rename_channels=rename_channels,
+        )
         await interaction.response.send_modal(modal)
+        self.stop()
+
+    @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Восстановление отменено.", view=None)
+        self.stop()
 
 
 # --- Название (можно оставить как есть или переименовать) + подтверждение ---
@@ -34,13 +110,27 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
         max_length=100
     )
 
-    def __init__(self, campaign_name: str, campaign_role, gm_role, channels: list):
+    def __init__(self, campaign_name: str, campaign_role, gm_role, channels: list, rename_channels: list | None = None):
         super().__init__()
         self.campaign_name = campaign_name
         self.campaign_role = campaign_role
         self.gm_role = gm_role
         self.channels = channels
         self.new_name.default = campaign_name
+
+        # Поля переименования каналов — по умолчанию текущее (архивное, с префиксом)
+        # имя, чтобы префикс можно было сразу тут же убрать. Если rename_channels не
+        # передан явно (кампания с небольшим числом каналов, отдельного выбора не
+        # потребовалось) — поле получает каждый канал кампании.
+        self.channel_name_inputs: dict[int, discord.ui.TextInput] = {}
+        for ch in (rename_channels if rename_channels is not None else channels):
+            field = discord.ui.TextInput(
+                label=f"Название канала «{ch.name}»"[:45],
+                default=ch.name,
+                max_length=100,
+            )
+            self.channel_name_inputs[ch.id] = field
+            self.add_item(field)
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -87,16 +177,25 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
 
             restored = []
             for channel in self.channels:
-                await resurrect_channel(guild, channel, category, campaign_role, gm_role)
+                field = self.channel_name_inputs.get(channel.id)
+                new_channel_name = field.value.strip() if field else None
+                await resurrect_channel(guild, channel, category, campaign_role, gm_role, new_name=new_channel_name)
                 restored.append(channel)
 
             restored_text = ", ".join(ch.mention for ch in restored) or "каналов не было"
+            skipped_count = len(self.channels) - len(self.channel_name_inputs)
+            note = (
+                f"У {skipped_count} канал(ов) название не менялось (не влезло в модалку) — "
+                f"поправить его можно через /campaign_edit.\n"
+                if skipped_count > 0 else ""
+            )
             message = (
                 f"Кампания **{final_name}** возвращена из архива!\n"
                 f"Роль: {campaign_role.mention}\n"
                 f"Каналы: {restored_text}\n"
-                f"Названия каналов и индивидуальный доступ (например «только ГМ») из архива не восстанавливаются "
-                f"автоматически — поправить их можно через /campaign_edit."
+                f"{note}"
+                f"Индивидуальный доступ (например «только ГМ»), если он был у канала до архивации, "
+                f"из архива не восстанавливается автоматически — поправить его можно через /campaign_edit."
             )
             await deliver_result(interaction, restored, message)
         except Exception as e:
