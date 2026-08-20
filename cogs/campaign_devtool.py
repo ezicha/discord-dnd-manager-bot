@@ -5,7 +5,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from .campaign_common import ARCHIVE_CATEGORY_NAME, GM_ROLE_PREFIX, channel_select_option
+from cogs.cmpgn.campaign_common import ARCHIVE_CATEGORY_NAME, GM_ROLE_PREFIX, channel_select_option
 
 logger = logging.getLogger("argus")
 

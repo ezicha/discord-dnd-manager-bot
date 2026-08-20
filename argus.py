@@ -37,7 +37,7 @@ async def ping(interaction: discord.Interaction):
 
 async def main():
     async with bot:
-        await bot.load_extension("cogs.campaigns")
+        await bot.load_extension("cogs.cmpgn.campaigns")
         await bot.load_extension("cogs.dice")
         await bot.load_extension("cogs.housekeeping")
         await bot.load_extension("cogs.campaign_devtool")
