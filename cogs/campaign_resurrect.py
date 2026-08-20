@@ -122,10 +122,13 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
         # имя, чтобы префикс можно было сразу тут же убрать. Если rename_channels не
         # передан явно (кампания с небольшим числом каналов, отдельного выбора не
         # потребовалось) — поле получает каждый канал кампании.
+        # В подписи поля указан тип канала — иначе одноимённые войс- и текстовый
+        # канал в модалке было бы не различить.
         self.channel_name_inputs: dict[int, discord.ui.TextInput] = {}
         for ch in (rename_channels if rename_channels is not None else channels):
+            type_label = "войс" if isinstance(ch, discord.VoiceChannel) else "текст"
             field = discord.ui.TextInput(
-                label=f"Название канала «{ch.name}»"[:45],
+                label=f"[{type_label}] {ch.name}"[:45],
                 default=ch.name,
                 max_length=100,
             )
@@ -176,13 +179,21 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
             await move_archive_to_end(guild)
 
             restored = []
+            renamed_from = {}
             for channel in self.channels:
                 field = self.channel_name_inputs.get(channel.id)
                 new_channel_name = field.value.strip() if field else None
+                old_name = channel.name
                 await resurrect_channel(guild, channel, category, campaign_role, gm_role, new_name=new_channel_name)
                 restored.append(channel)
+                if channel.name != old_name:
+                    renamed_from[channel.id] = old_name
 
-            restored_text = ", ".join(ch.mention for ch in restored) or "каналов не было"
+            channel_lines = [
+                f"{renamed_from[ch.id]} → {ch.mention}" if ch.id in renamed_from else ch.mention
+                for ch in restored
+            ]
+            restored_text = ", ".join(channel_lines) or "каналов не было"
             skipped_count = len(self.channels) - len(self.channel_name_inputs)
             note = (
                 f"У {skipped_count} канал(ов) название не менялось (не влезло в модалку) — "

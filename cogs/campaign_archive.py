@@ -79,7 +79,7 @@ class ArchivePrefixModal(discord.ui.Modal, title="Префиксы для арх
         archive_category = await get_or_create_archive_category(guild)
 
         archived_summary = []
-        all_moved_channels = []
+        archived_per_campaign = []
 
         try:
             for chosen_name in self.chosen_names:
@@ -92,13 +92,34 @@ class ArchivePrefixModal(discord.ui.Modal, title="Префиксы для арх
                     moved_channels.append(channel)
 
                 await category.delete()
-                all_moved_channels.extend(moved_channels)
+                archived_per_campaign.append((chosen_name, prefix, moved_channels))
 
                 channels_text = ", ".join(ch.mention for ch in moved_channels) or "каналов не было"
                 archived_summary.append(f"**{chosen_name}** (префикс `{prefix}`): {channels_text}")
 
-            message = "Заархивировано:\n" + "\n".join(archived_summary)
-            await deliver_result(interaction, all_moved_channels, message)
+            # Каждой кампании — своё сообщение в её собственные каналы, а не общая
+            # сводка по всем сразу (иначе в канал одной кампании прилетал бы список
+            # и других заархивированных заодно с ней).
+            no_text_channel_summaries = []
+            any_text_channel_found = False
+            for chosen_name, prefix, moved_channels in archived_per_campaign:
+                channels_text = ", ".join(ch.mention for ch in moved_channels) or "каналов не было"
+                campaign_message = f"Кампания **{chosen_name}** заархивирована (префикс `{prefix}`): {channels_text}"
+                text_channels = [ch for ch in moved_channels if isinstance(ch, discord.TextChannel)]
+                if text_channels:
+                    any_text_channel_found = True
+                    for ch in text_channels:
+                        await ch.send(campaign_message)
+                else:
+                    no_text_channel_summaries.append(campaign_message)
+
+            if no_text_channel_summaries:
+                await interaction.followup.send(
+                    "Нет текстового канала, чтобы отправить туда итог, для:\n" + "\n".join(no_text_channel_summaries),
+                    ephemeral=True
+                )
+            if any_text_channel_found:
+                await interaction.followup.send("Готово.", ephemeral=True)
         except Exception as e:
             logger.error("Ошибка при архивации: %s", repr(e))
             done_text = "\n".join(archived_summary) if archived_summary else "ничего не успело обработаться"

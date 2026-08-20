@@ -151,6 +151,8 @@ class RestoreChannelRenameModal(discord.ui.Modal, title="Вернуть кана
     """
     По одному полю на каждый выбранный канал — по умолчанию текущее (архивное,
     с префиксом) название, можно сразу поправить прямо тут при восстановлении.
+    В подписи поля указан тип канала — иначе одноимённые войс- и текстовый
+    канал в модалке было бы не различить.
     """
     def __init__(self, category, campaign_role, gm_role, channels: list):
         super().__init__()
@@ -161,8 +163,9 @@ class RestoreChannelRenameModal(discord.ui.Modal, title="Вернуть кана
         self.name_inputs: dict[int, discord.ui.TextInput] = {}
 
         for ch in channels:
+            type_label = "войс" if isinstance(ch, discord.VoiceChannel) else "текст"
             field = discord.ui.TextInput(
-                label=f"Название канала «{ch.name}»"[:45],
+                label=f"[{type_label}] {ch.name}"[:45],
                 default=ch.name,
                 max_length=100,
             )
@@ -173,17 +176,25 @@ class RestoreChannelRenameModal(discord.ui.Modal, title="Вернуть кана
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
         restored = []
+        renamed_from = {}
 
         try:
             for channel in self.channels:
                 field = self.name_inputs.get(channel.id)
                 new_name = field.value.strip() if field else None
+                old_name = channel.name
                 await resurrect_channel(
                     guild, channel, self.category, self.campaign_role, self.gm_role, new_name=new_name
                 )
                 restored.append(channel)
+                if channel.name != old_name:
+                    renamed_from[channel.id] = old_name
 
-            restored_text = ", ".join(ch.mention for ch in restored) or "ничего не восстановлено"
+            channel_lines = [
+                f"{renamed_from[ch.id]} → {ch.mention}" if ch.id in renamed_from else ch.mention
+                for ch in restored
+            ]
+            restored_text = ", ".join(channel_lines) or "ничего не восстановлено"
             message = f"Каналы возвращены в кампанию: {restored_text}"
             await deliver_result(interaction, restored, message)
         except Exception as e:
