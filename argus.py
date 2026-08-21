@@ -34,6 +34,27 @@ async def on_ready():
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Не распускайте руки.")
 
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
+    # discord.py заворачивает "настоящее" исключение из команды в CommandInvokeError —
+    # error.original содержит его; если обёртки нет, логируем error как есть.
+    original = getattr(error, "original", error)
+    logger.error(
+        "Необработанная ошибка в команде /%s: %s",
+        interaction.command.name if interaction.command else "?",
+        repr(original),
+    )
+
+    message = f"Что-то пошло не так. Ошибка: {original}"
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except discord.HTTPException:
+        # Если и это не отправится (например, взаимодействие уже протухло
+        # по таймауту) — тут уже ничего не поделать, просто не роняем бота.
+        pass
 
 async def main():
     async with bot:
