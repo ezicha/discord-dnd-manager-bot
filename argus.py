@@ -59,6 +59,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: discord.
 async def main():
     async with bot:
         await bot.load_extension("cogs.cmpgn.campaigns")
+        await bot.load_extension("cogs.events.events")
         await bot.load_extension("cogs.dice")
         await bot.load_extension("cogs.housekeeping")
         await bot.load_extension("cogs.campaign_devtool")

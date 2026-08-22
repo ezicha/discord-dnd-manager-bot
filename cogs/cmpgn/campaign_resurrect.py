@@ -126,7 +126,7 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
         # канал в модалке было бы не различить.
         self.channel_name_inputs: dict[int, discord.ui.TextInput] = {}
         for ch in (rename_channels if rename_channels is not None else channels):
-            type_label = "войс" if isinstance(ch, discord.VoiceChannel) else "текст"
+            type_label = "🔊" if isinstance(ch, discord.VoiceChannel) else "#️⃣"
             field = discord.ui.TextInput(
                 label=f"[{type_label}] {ch.name}"[:45],
                 default=ch.name,
