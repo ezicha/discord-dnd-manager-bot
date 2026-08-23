@@ -35,7 +35,7 @@ class TitleTimeModal(discord.ui.Modal, title="Название и время с�
             default=parent_view.title or "",
         )
         self.time_input = discord.ui.TextInput(
-            label="Время (MSK, формат ЧЧ:ММ)", max_length=5, required=True,
+            label="Время (NSK, формат ЧЧ:ММ)", max_length=5, required=True,
             placeholder="19:00", default=parent_view.time_str or "",
         )
         self.description_input = discord.ui.TextInput(

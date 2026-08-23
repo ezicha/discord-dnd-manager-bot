@@ -148,7 +148,7 @@ def build_event_preview_embed(
     )
     embed.add_field(name="Кампания", value=campaign_name, inline=True)
     embed.add_field(name="Канал", value=channel.mention if channel else "не выбран", inline=True)
-    embed.add_field(name="Время (MSK)", value=time_str or "не указано", inline=True)
+    embed.add_field(name="Время (NSK)", value=time_str or "не указано", inline=True)
 
     selected_line = f"Выбрано: {format_date_ru(datetime.strptime(date_iso, '%Y-%m-%d').date())}" if date_iso else "Выбрано: дата ещё не выбрана"
     embed.add_field(name="Календарь", value=f"{calendar_text}\n{selected_line}", inline=False)

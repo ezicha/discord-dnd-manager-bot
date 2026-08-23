@@ -17,7 +17,7 @@ class EventCancelSelect(discord.ui.Select):
         options = [
             discord.SelectOption(
                 label=ev.name[:100],
-                description=ev.start_time.astimezone(SERVER_TZ).strftime("%d.%m, %H:%M MSK"),
+                description=ev.start_time.astimezone(SERVER_TZ).strftime("%d.%m, %H:%M NSK"),
                 value=str(ev.id),
             )
             for ev in events[:25]
@@ -39,7 +39,7 @@ class EventCancelSelect(discord.ui.Select):
 
         self.parent_view.selected_event = event
         self.parent_view.rebuild_items()
-        when = event.start_time.astimezone(SERVER_TZ).strftime("%d.%m, %H:%M MSK")
+        when = event.start_time.astimezone(SERVER_TZ).strftime("%d.%m, %H:%M NSK")
         await interaction.response.edit_message(
             content=f"Точно отменить «{event.name}» ({when})?", view=self.parent_view
         )
