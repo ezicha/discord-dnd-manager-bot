@@ -8,7 +8,7 @@ from datetime import timedelta
 
 import discord
 
-from .event_announcements import set_announcement
+from .event_announcements import record_event
 
 from .event_common import (
     MAX_DAYS_AHEAD,
@@ -172,14 +172,19 @@ class CreateEventButton(discord.ui.Button):
             return
 
         announce_note = ""
+        announce_channel_id = None
+        announce_message_id = None
         if v.selected_announce_channel is not None:
             role = get_campaign_role(interaction.guild, v.campaign_name)
             content = role.mention if role else None
             announce_embed = build_event_announcement_embed(v.campaign_name, event)
             announce_message = await v.selected_announce_channel.send(content=content, embed=announce_embed)
-            set_announcement(event.id, v.selected_announce_channel.id, announce_message.id)
+            announce_channel_id = v.selected_announce_channel.id
+            announce_message_id = announce_message.id
         else:
             announce_note = " (анонс не отправлен — нет текстового канала кампании)"
+
+        record_event(event.id, interaction.user.id, announce_channel_id, announce_message_id)
 
         for item in v.children:
             item.disabled = True

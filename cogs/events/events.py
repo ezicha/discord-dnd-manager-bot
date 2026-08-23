@@ -14,7 +14,7 @@ from .event_common import (
     user_role_in_campaign
 )
 from .event_create import EventCreateView
-
+from .event_cancel import EventCancelView
 
 class EventsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -59,6 +59,54 @@ class EventsCog(commands.Cog):
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         except Exception:
             logger.exception("Ошибка в /event_create")
+            msg = "Что-то пошло не так."
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+
+    @app_commands.command(
+        name="event_cancel",
+        description="Отменить событие (сессию) кампании",
+    )
+    async def event_cancel(self, interaction: discord.Interaction):
+        try:
+            campaign_name = get_campaign_for_channel(interaction.channel)
+            if campaign_name is None:
+                await interaction.response.send_message(
+                    "Эта команда вызывается внутри канала кампании.", ephemeral=True
+                )
+                return
+
+            if user_role_in_campaign(interaction.user, campaign_name) is None:
+                await interaction.response.send_message(
+                    "Ты не состоишь в этой кампании.", ephemeral=True
+                )
+                return
+
+            category = interaction.channel.category
+            voice_channel_ids = {
+                ch.id for ch in (category.channels if category else [])
+                if isinstance(ch, discord.VoiceChannel)
+            }
+            now = discord.utils.utcnow()
+            events = [
+                ev for ev in interaction.guild.scheduled_events
+                if ev.channel_id in voice_channel_ids and ev.start_time > now
+            ]
+            if not events:
+                await interaction.response.send_message(
+                    "У этой кампании нет запланированных событий.", ephemeral=True
+                )
+                return
+            events.sort(key=lambda e: e.start_time)
+
+            view = EventCancelView(campaign_name, events, interaction.user)
+            await interaction.response.send_message(
+                "Выбери событие, которое нужно отменить:", view=view, ephemeral=True
+            )
+        except Exception:
+            logger.exception("Ошибка в /event_cancel")
             msg = "Что-то пошло не так."
             if interaction.response.is_done():
                 await interaction.followup.send(msg, ephemeral=True)
