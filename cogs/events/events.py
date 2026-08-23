@@ -6,7 +6,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from .event_common import build_event_preview_embed, get_campaign_for_channel, logger, user_role_in_campaign
+from .event_common import (
+    build_event_preview_embed, 
+    generate_calendar_text_for_week,
+    get_campaign_for_channel, 
+    logger,
+    user_role_in_campaign
+)
 from .event_create import EventCreateView
 
 
@@ -34,10 +40,9 @@ class EventsCog(commands.Cog):
                 return
 
             category = interaction.channel.category
-            voice_channels = [
-                ch for ch in (category.channels if category else [])
-                if isinstance(ch, discord.VoiceChannel)
-            ]
+            all_channels = category.channels if category else []
+            voice_channels = [ch for ch in all_channels if isinstance(ch, discord.VoiceChannel)]
+            text_channels = [ch for ch in all_channels if isinstance(ch, discord.TextChannel)]
             if not voice_channels:
                 await interaction.response.send_message(
                     "У этой кампании нет войс-канала — событие не к чему привязать.",
@@ -45,11 +50,12 @@ class EventsCog(commands.Cog):
                 )
                 return
 
-            view = EventCreateView(campaign_name, voice_channels, interaction.user)
+            view = EventCreateView(campaign_name, voice_channels, text_channels, interaction.user)
             embed = build_event_preview_embed(
                 campaign_name, None, None, None,
                 voice_channels[0] if len(voice_channels) == 1 else None, None,
-            )
+                generate_calendar_text_for_week(view.week_start),
+                )
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         except Exception:
             logger.exception("Ошибка в /event_create")

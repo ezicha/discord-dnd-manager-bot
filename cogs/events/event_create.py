@@ -1,18 +1,28 @@
 """
-Вью и модалка для /event_create.
+Вью и модалка для /event_create — выбор дня через календарь (кнопки), а не select.
 """
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import discord
 
+from .event_announcements import set_announcement
+
 from .event_common import (
+    MAX_DAYS_AHEAD,
     SERVER_TZ,
     build_event_preview_embed,
     combine_date_and_time,
     create_scheduled_event,
-    generate_date_options,
+    generate_calendar_text_for_week,
     parse_time_input,
+    today_server,
+    week_dates,
+    week_start_for,
+    build_event_announcement_embed,
+    get_campaign_role
 )
 
 
@@ -52,30 +62,43 @@ class TitleTimeModal(discord.ui.Modal, title="Название и время с�
         )
 
 
-class DateSelect(discord.ui.Select):
-    def __init__(self, parent_view: "EventCreateView"):
+class DayButton(discord.ui.Button):
+    def __init__(self, parent_view: "EventCreateView", date_iso: str, label: str, row: int, disabled: bool):
+        super().__init__(label=label, style=discord.ButtonStyle.secondary, row=row, disabled=disabled)
         self.parent_view = parent_view
-        super().__init__(
-            placeholder="Выбери день",
-            options=generate_date_options(),
-            min_values=1, max_values=1,
-        )
+        self.date_iso = date_iso
 
     async def callback(self, interaction: discord.Interaction):
-        self.parent_view.selected_date = self.values[0]
+        self.parent_view.selected_date = self.date_iso
+        self.parent_view.rebuild_items()
+        await interaction.response.edit_message(
+            embed=self.parent_view.build_embed(), view=self.parent_view
+        )
+
+
+class WeekNavButton(discord.ui.Button):
+    def __init__(self, parent_view: "EventCreateView", direction: int, row: int, disabled: bool):
+        label = "◀" if direction < 0 else "▶"
+        super().__init__(label=label, style=discord.ButtonStyle.primary, row=row, disabled=disabled)
+        self.parent_view = parent_view
+        self.direction = direction
+
+    async def callback(self, interaction: discord.Interaction):
+        self.parent_view.week_start += timedelta(days=7 * self.direction)
+        self.parent_view.rebuild_items()
         await interaction.response.edit_message(
             embed=self.parent_view.build_embed(), view=self.parent_view
         )
 
 
 class ChannelSelect(discord.ui.Select):
-    def __init__(self, parent_view: "EventCreateView", voice_channels: list[discord.VoiceChannel]):
+    def __init__(self, parent_view: "EventCreateView", voice_channels: list[discord.VoiceChannel], row: int):
         self.parent_view = parent_view
         options = [
             discord.SelectOption(label=ch.name, value=str(ch.id))
             for ch in voice_channels[:25]
         ]
-        super().__init__(placeholder="Выбери войс-канал", options=options, min_values=1, max_values=1)
+        super().__init__(placeholder="Выбери войс-канал", options=options, min_values=1, max_values=1, row=row)
         self._channels_by_id = {str(ch.id): ch for ch in voice_channels}
 
     async def callback(self, interaction: discord.Interaction):
@@ -84,10 +107,25 @@ class ChannelSelect(discord.ui.Select):
             embed=self.parent_view.build_embed(), view=self.parent_view
         )
 
+class AnnounceChannelSelect(discord.ui.Select):
+    def __init__(self, parent_view: "EventCreateView", text_channels: list[discord.TextChannel], row: int):
+        self.parent_view = parent_view
+        options = [
+            discord.SelectOption(label=f"#{ch.name}", value=str(ch.id))
+            for ch in text_channels[:25]
+        ]
+        super().__init__(placeholder="Куда постить анонс", options=options, min_values=1, max_values=1, row=row)
+        self._channels_by_id = {str(ch.id): ch for ch in text_channels}
+
+    async def callback(self, interaction: discord.Interaction):
+        self.parent_view.selected_announce_channel = self._channels_by_id[self.values[0]]
+        await interaction.response.edit_message(
+            embed=self.parent_view.build_embed(), view=self.parent_view
+        )
 
 class FillDetailsButton(discord.ui.Button):
-    def __init__(self, parent_view: "EventCreateView"):
-        super().__init__(label="Название и время", style=discord.ButtonStyle.secondary)
+    def __init__(self, parent_view: "EventCreateView", row: int):
+        super().__init__(label="Название и время", style=discord.ButtonStyle.secondary, row=row)
         self.parent_view = parent_view
 
     async def callback(self, interaction: discord.Interaction):
@@ -95,8 +133,8 @@ class FillDetailsButton(discord.ui.Button):
 
 
 class CreateEventButton(discord.ui.Button):
-    def __init__(self, parent_view: "EventCreateView"):
-        super().__init__(label="Создать", style=discord.ButtonStyle.success)
+    def __init__(self, parent_view: "EventCreateView", row: int):
+        super().__init__(label="Создать", style=discord.ButtonStyle.success, row=row)
         self.parent_view = parent_view
 
     async def callback(self, interaction: discord.Interaction):
@@ -105,16 +143,13 @@ class CreateEventButton(discord.ui.Button):
         if not v.selected_date:
             missing.append("день")
         if not v.selected_channel:
-            missing.append("канал")
+            missing.append("войс-канал")
+        if v.text_channels and not v.selected_announce_channel:
+            missing.append("канал для анонса")
         if not v.title:
             missing.append("название")
         if not v.time_str:
             missing.append("время")
-        if missing:
-            await interaction.response.send_message(
-                f"Сначала заполни: {', '.join(missing)}.", ephemeral=True
-            )
-            return
 
         hour, minute = parse_time_input(v.time_str)
         start_dt = combine_date_and_time(v.selected_date, hour, minute)
@@ -136,32 +171,93 @@ class CreateEventButton(discord.ui.Button):
             await interaction.response.send_message(error, ephemeral=True)
             return
 
+        announce_note = ""
+        if v.selected_announce_channel is not None:
+            role = get_campaign_role(interaction.guild, v.campaign_name)
+            content = role.mention if role else None
+            announce_embed = build_event_announcement_embed(v.campaign_name, event)
+            announce_message = await v.selected_announce_channel.send(content=content, embed=announce_embed)
+            set_announcement(event.id, v.selected_announce_channel.id, announce_message.id)
+        else:
+            announce_note = " (анонс не отправлен — нет текстового канала кампании)"
+
         for item in v.children:
             item.disabled = True
         await interaction.response.edit_message(
-            content=f"Готово! Событие «{v.title}» создано: {event.url}",
+            content=f"Готово! Событие «{v.title}» создано: {event.url}{announce_note}",
             embed=v.build_embed(), view=v,
         )
 
+class CancelButton(discord.ui.Button):
+    def __init__(self, parent_view: "EventCreateView", row: int):
+        super().__init__(label="Отмена", style=discord.ButtonStyle.secondary, row=row)
+        self.parent_view = parent_view
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(content="Событие отменено.", view=None)
+        self.parent_view.stop()
 
 class EventCreateView(discord.ui.View):
-    def __init__(self, campaign_name: str, voice_channels: list[discord.VoiceChannel], requester: discord.Member):
+    # Ряды: 0 — Пн–Пт (5 кнопок), 1 — ◀/Сб/Вс/▶ (4 кнопки),
+    # 2 — select канала (если каналов > 1), 3 — "Название и время"/"Создать".
+    def __init__(
+        self,
+        campaign_name: str,
+        voice_channels: list[discord.VoiceChannel],
+        text_channels: list[discord.TextChannel],
+        requester: discord.Member,
+    ):
         super().__init__(timeout=600)
         self.campaign_name = campaign_name
+        self.voice_channels = voice_channels
+        self.text_channels = text_channels
         self.requester = requester
+
+        self.week_start = week_start_for(today_server())
         self.selected_date: str | None = None
         self.selected_channel: discord.VoiceChannel | None = (
             voice_channels[0] if len(voice_channels) == 1 else None
+        )
+        self.selected_announce_channel: discord.TextChannel | None = (
+            text_channels[0] if len(text_channels) == 1 else None
         )
         self.title: str | None = None
         self.time_str: str | None = None
         self.description: str | None = None
 
-        self.add_item(DateSelect(self))
-        if len(voice_channels) > 1:
-            self.add_item(ChannelSelect(self, voice_channels))
-        self.add_item(FillDetailsButton(self))
-        self.add_item(CreateEventButton(self))
+        self.rebuild_items()
+
+    def rebuild_items(self) -> None:
+        self.clear_items()
+        today = today_server()
+        max_date = today + timedelta(days=MAX_DAYS_AHEAD)
+        dates = week_dates(self.week_start)
+
+        for i, d in enumerate(dates[:5]):  # Пн–Пт
+            disabled = d < today or d > max_date
+            self.add_item(DayButton(self, d.isoformat(), str(d.day), row=0, disabled=disabled))
+
+        can_go_prev = self.week_start > week_start_for(today)
+        can_go_next = self.week_start + timedelta(days=7) <= max_date
+        if can_go_prev:
+            self.add_item(WeekNavButton(self, -1, row=1, disabled=False))
+        for d in dates[5:]:  # Сб, Вс
+            disabled = d < today or d > max_date
+            self.add_item(DayButton(self, d.isoformat(), str(d.day), row=1, disabled=disabled))
+        if can_go_next:
+            self.add_item(WeekNavButton(self, 1, row=1, disabled=False))
+
+        row = 2
+        if len(self.voice_channels) > 1:
+            self.add_item(ChannelSelect(self, self.voice_channels, row=row))
+            row += 1
+        if len(self.text_channels) > 1:
+            self.add_item(AnnounceChannelSelect(self, self.text_channels, row=row))
+            row += 1
+
+        self.add_item(FillDetailsButton(self, row=row))
+        self.add_item(CreateEventButton(self, row=row))
+        self.add_item(CancelButton(self, row=row))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.requester.id:
@@ -172,7 +268,9 @@ class EventCreateView(discord.ui.View):
         return True
 
     def build_embed(self) -> discord.Embed:
+        calendar_text = generate_calendar_text_for_week(self.week_start, self.selected_date)
         return build_event_preview_embed(
             self.campaign_name, self.title, self.selected_date,
             self.time_str, self.selected_channel, self.description,
+            calendar_text,
         )
