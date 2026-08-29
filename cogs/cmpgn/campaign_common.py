@@ -150,7 +150,7 @@ async def resurrect_channel(guild, channel, category, campaign_role, gm_role, ne
 
     Индивидуальные настройки доступа канала (например «только ГМ»), если они
     были у него до архивации, не сохраняются — при необходимости их можно
-    заново включить через /campaign_edit → «Изменить доступ».
+    заново включить через /campaign edit → «Изменить доступ».
 
     Если передан new_name (и он отличается от текущего) — канал заодно
     переименовывается тем же вызовом edit(), без отдельного запроса к API.
@@ -217,7 +217,7 @@ def get_archived_channels_for_campaign(guild: discord.Guild, campaign_role, gm_r
     (тот же принцип поиска, что и в get_gm_archived_campaigns). В отличие от неё,
     не проверяет, жива ли сейчас активная категория кампании — нужна именно для
     случая, когда кампания активна, а один канал из неё заранее заархивировали
-    отдельно через /campaign_edit → «Архивировать канал».
+    отдельно через /campaign edit → «Архивировать канал».
     """
     archive_category = discord.utils.get(guild.categories, name=ARCHIVE_CATEGORY_NAME)
     if not archive_category:

@@ -42,7 +42,7 @@ class ResurrectSelectView(discord.ui.View):
                     f"У кампании **{chosen_name}** больше {MAX_CHANNELS_FOR_RENAME} заархивированных каналов — "
                     f"переименовать сразу можно не больше {MAX_CHANNELS_FOR_RENAME} за раз (лимит полей в модалке Discord, "
                     f"одно из них уже занято под название кампании). Выбери, какие каналы переименовать сейчас — "
-                    f"остальные вернутся с прежним названием, поправить его потом можно через /campaign_edit. "
+                    f"остальные вернутся с прежним названием, поправить его потом можно через /campaign edit. "
                     f"Восстановлены при этом будут все каналы, независимо от выбора здесь."
                 ),
                 view=view,
@@ -126,7 +126,7 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
         # канал в модалке было бы не различить.
         self.channel_name_inputs: dict[int, discord.ui.TextInput] = {}
         for ch in (rename_channels if rename_channels is not None else channels):
-            type_label = "🔊" if isinstance(ch, discord.VoiceChannel) else "#️⃣"
+            type_label = "войс" if isinstance(ch, discord.VoiceChannel) else "текст"
             field = discord.ui.TextInput(
                 label=f"[{type_label}] {ch.name}"[:45],
                 default=ch.name,
@@ -197,7 +197,7 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
             skipped_count = len(self.channels) - len(self.channel_name_inputs)
             note = (
                 f"У {skipped_count} канал(ов) название не менялось (не влезло в модалку) — "
-                f"поправить его можно через /campaign_edit.\n"
+                f"поправить его можно через /campaign edit.\n"
                 if skipped_count > 0 else ""
             )
             message = (
@@ -206,7 +206,7 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
                 f"Каналы: {restored_text}\n"
                 f"{note}"
                 f"Индивидуальный доступ (например «только ГМ»), если он был у канала до архивации, "
-                f"из архива не восстанавливается автоматически — поправить его можно через /campaign_edit."
+                f"из архива не восстанавливается автоматически — поправить его можно через /campaign edit."
             )
             await deliver_result(interaction, restored, message)
         except Exception as e:
