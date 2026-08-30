@@ -25,7 +25,9 @@ async def on_ready():
     print(f"Бот запущен как {bot.user} (ID: {bot.user.id})")
     try:
         synced = await bot.tree.sync()
-        print(f"Синхронизировано {len(synced)} слэш-команд")
+        print(f"Синхронизировано {len(synced)} слэш-команд:")
+        names = [c.name for c in synced]
+        print(names)
     except Exception as e:
         print(f"Ошибка синхронизации команд: {e}")
 
