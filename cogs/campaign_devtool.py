@@ -250,15 +250,18 @@ class KeepChannelsView(discord.ui.View):
         self.add_item(ProceedButton())
 
 
-class CampaignDevTools(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
+class DevGroup(app_commands.Group):
+    def __init__(self):
+        super().__init__(
+            name="dev",
+            description="Инструменты для тестирования (только на этапе разработки)",
+        )
 
     @app_commands.command(
-        name="dev_wipe_archive",
-        description="[DEV] Удалить каналы архива, кроме выбранных, вместе с их ролями",
+        name="wipe_archive",
+        description="Удалить каналы архива, кроме выбранных, вместе с их ролями",
     )
-    async def dev_wipe_archive(self, interaction: discord.Interaction):
+    async def wipe_archive(self, interaction: discord.Interaction):
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("Только на сервере.", ephemeral=True)
@@ -292,10 +295,10 @@ class CampaignDevTools(commands.Cog):
         )
 
     @app_commands.command(
-        name="dev_strip_my_roles",
-        description="[DEV] Снять с себя роли кампаний (ГМ/участник), кроме выбранных",
+        name="strip_my_roles",
+        description="Снять с себя роли кампаний (ГМ/участник), кроме выбранных",
     )
-    async def dev_strip_my_roles(self, interaction: discord.Interaction):
+    async def strip_my_roles(self, interaction: discord.Interaction):
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("Только на сервере.", ephemeral=True)
@@ -325,6 +328,12 @@ class CampaignDevTools(commands.Cog):
             view=KeepRolesView(campaign_roles),
             ephemeral=True,
         )
+
+
+class CampaignDevTools(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.bot.tree.add_command(DevGroup())
 
 
 async def setup(bot: commands.Bot):
