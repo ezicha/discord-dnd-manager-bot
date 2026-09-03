@@ -181,6 +181,38 @@ async def create_scheduled_event(
         logger.exception("Ошибка Discord API при создании события")
         return None, f"Discord отклонил запрос: {e}"
 
+
+async def edit_scheduled_event(
+    event: discord.ScheduledEvent,
+    name: str,
+    channel: discord.VoiceChannel,
+    start_time: datetime,
+    description: str | None,
+) -> tuple[discord.ScheduledEvent | None, str | None]:
+    """Редактирует существующий Scheduled Event. Возвращает (event, None) либо (None, текст_ошибки)."""
+    try:
+        updated = await event.edit(
+            name=name,
+            channel=channel,
+            start_time=start_time,
+            description=description,
+        )
+        return updated, None
+    except discord.Forbidden:
+        logger.exception("Нет прав на редактирование Scheduled Event")
+        return None, "У бота нет прав на редактирование событий на этом сервере."
+    except discord.HTTPException as e:
+        logger.exception("Ошибка Discord API при редактировании события")
+        return None, f"Discord отклонил запрос: {e}"
+
+
+def can_manage_event(member: discord.Member, campaign_name: str, creator_id: int | None) -> bool:
+    """ГМ кампании или тот, кто создал это конкретное событие, может им управлять (редактировать/отменять)."""
+    is_gm = user_role_in_campaign(member, campaign_name) == "gm"
+    is_creator = creator_id is not None and creator_id == member.id
+    return is_gm or is_creator
+    
+
 def get_campaign_role(guild: discord.Guild, campaign_name: str) -> discord.Role | None:
     """Роль игроков-участников кампании (название совпадает с названием кампании)."""
     return discord.utils.get(guild.roles, name=campaign_name)

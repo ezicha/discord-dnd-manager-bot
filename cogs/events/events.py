@@ -15,6 +15,7 @@ from .event_common import (
 )
 from .event_create import EventCreateView
 from .event_cancel import EventCancelView
+from .event_edit import EventEditSelectView
 
 
 class EventGroup(app_commands.Group):
@@ -62,6 +63,53 @@ class EventGroup(app_commands.Group):
                 await interaction.followup.send(msg, ephemeral=True)
             else:
                 await interaction.response.send_message(msg, ephemeral=True)
+
+
+    @app_commands.command(name="edit", description="Редактировать событие (сессию) кампании")
+    async def edit(self, interaction: discord.Interaction):
+        try:
+            campaign_name = get_campaign_for_channel(interaction.channel)
+            if campaign_name is None:
+                await interaction.response.send_message(
+                    "Эта команда вызывается внутри канала кампании.", ephemeral=True
+                )
+                return
+
+            if user_role_in_campaign(interaction.user, campaign_name) is None:
+                await interaction.response.send_message(
+                    "Ты не состоишь в этой кампании.", ephemeral=True
+                )
+                return
+
+            category = interaction.channel.category
+            all_channels = category.channels if category else []
+            voice_channel_ids = {ch.id for ch in all_channels if isinstance(ch, discord.VoiceChannel)}
+            text_channels = [ch for ch in all_channels if isinstance(ch, discord.TextChannel)]
+
+            now = discord.utils.utcnow()
+            events = [
+                ev for ev in interaction.guild.scheduled_events
+                if ev.channel_id in voice_channel_ids and ev.start_time > now
+            ]
+            if not events:
+                await interaction.response.send_message(
+                    "У этой кампании нет запланированных событий.", ephemeral=True
+                )
+                return
+            events.sort(key=lambda e: e.start_time)
+
+            view = EventEditSelectView(campaign_name, text_channels, events, interaction.user)
+            await interaction.response.send_message(
+                "Выбери событие, которое нужно отредактировать:", view=view, ephemeral=True
+            )
+        except Exception:
+            logger.exception("Ошибка в /event edit")
+            msg = "Что-то пошло не так."
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+
 
     @app_commands.command(name="cancel", description="Отменить событие (сессию) кампании")
     async def cancel(self, interaction: discord.Interaction):

@@ -7,7 +7,7 @@ from __future__ import annotations
 import discord
 
 from .event_announcements import delete_event_record, get_event_record
-from .event_common import SERVER_TZ, user_role_in_campaign
+from .event_common import SERVER_TZ, can_manage_event
 
 
 class EventCancelSelect(discord.ui.Select):
@@ -28,9 +28,7 @@ class EventCancelSelect(discord.ui.Select):
         event = self._events_by_id[self.values[0]]
         record = get_event_record(event.id)
         creator_id = record["creator_id"] if record else None
-        is_gm = user_role_in_campaign(interaction.user, self.parent_view.campaign_name) == "gm"
-        is_creator = creator_id == interaction.user.id
-        if not (is_gm or is_creator):
+        if not can_manage_event(interaction.user, self.parent_view.campaign_name, creator_id):
             await interaction.response.send_message(
                 "Отменить это событие может только ГМ кампании или тот, кто его создал.",
                 ephemeral=True,
