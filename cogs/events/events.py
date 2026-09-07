@@ -4,8 +4,9 @@ Cog с командами по событиям кампаний, сгруппи
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
+from .event_announcements import delete_event_record, get_all_records
 from .event_common import (
     build_event_preview_embed,
     generate_calendar_text_for_week,
@@ -161,6 +162,38 @@ class EventsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.bot.tree.add_command(EventGroup())
+        self.cleanup_stale_event_records.start()
+
+    def cog_unload(self) -> None:
+        self.cleanup_stale_event_records.cancel()
+
+    @tasks.loop(hours=24 * 7)
+    async def cleanup_stale_event_records(self) -> None:
+        """Раз в неделю (и сразу при старте бота) чистит record_event-записи,
+        чей event_id больше не встречается ни в одном guild.scheduled_events —
+        событие либо состоялось и пропало из списка активных, либо было удалено
+        не через /event cancel (например, через /dev_wipe_archive)."""
+        records = get_all_records()
+        if not records:
+            return
+
+        live_ids = {
+            ev.id
+            for guild in self.bot.guilds
+            for ev in guild.scheduled_events
+        }
+        removed = 0
+        for event_id_str in list(records.keys()):
+            if int(event_id_str) not in live_ids:
+                delete_event_record(int(event_id_str))
+                removed += 1
+
+        if removed:
+            logger.info("Очистка event_announcements.json: удалено %d устаревших записей", removed)
+
+    @cleanup_stale_event_records.before_loop
+    async def before_cleanup(self) -> None:
+        await self.bot.wait_until_ready()
 
 
 async def setup(bot: commands.Bot):

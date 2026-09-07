@@ -50,3 +50,7 @@ def delete_event_record(event_id: int) -> None:
     if str(event_id) in data:
         del data[str(event_id)]
         _save(data)
+
+
+def get_all_records() -> dict[str, dict]:
+    return _load()
