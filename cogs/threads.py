@@ -134,9 +134,9 @@ class ThreadMembersView(discord.ui.View):
         self.spoiler = False
         self.add_item(ThreadMembersSelect())
         self.add_item(ThreadAutoArchiveSelect())
+        self.add_item(ThreadCreateConfirmButton())
         self.add_item(ThreadSpoilerToggleButton())
         self.add_item(ThreadCancelButton())
-        self.add_item(ThreadCreateConfirmButton())
 
 
 class Threads(commands.Cog):
