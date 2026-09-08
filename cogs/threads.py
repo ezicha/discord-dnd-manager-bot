@@ -3,6 +3,9 @@ import logging
 import discord
 from discord import app_commands
 from discord.ext import commands
+from discord.http import Route
+
+SPOILER_CHANNEL_FLAG = 1 << 21
 
 logger = logging.getLogger("argus")
 
@@ -26,9 +29,45 @@ class ThreadMembersSelect(discord.ui.UserSelect):
         await interaction.response.defer()
 
 
+class ThreadAutoArchiveSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Закрыть через 1 час", value="60"),
+            discord.SelectOption(label="Закрыть через 24 часа", value="1440", default=True),
+            discord.SelectOption(label="Закрыть через 3 дня", value="4320"),
+            discord.SelectOption(label="Закрыть через неделю", value="10080"),
+        ]
+        super().__init__(placeholder="Когда закрыть тред при неактивности", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.auto_archive_duration = int(self.values[0])
+        await interaction.response.defer()
+
+
+class ThreadSpoilerToggleButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Спойлер: выкл", style=discord.ButtonStyle.secondary, row=2)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: ThreadMembersView = self.view
+        view.spoiler = not view.spoiler
+        self.label = f"Спойлер: {'вкл' if view.spoiler else 'выкл'}"
+        self.style = discord.ButtonStyle.success if view.spoiler else discord.ButtonStyle.secondary
+        await interaction.response.edit_message(view=view)
+
+
+class ThreadCancelButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Отмена", style=discord.ButtonStyle.secondary, row=2)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(content="Создание треда отменено.", view=None)
+        self.view.stop()
+
+
 class ThreadCreateConfirmButton(discord.ui.Button):
     def __init__(self):
-        super().__init__(label="Создать тред", style=discord.ButtonStyle.primary)
+        super().__init__(label="Создать тред", style=discord.ButtonStyle.primary, row=2)
 
     async def callback(self, interaction: discord.Interaction):
         view: ThreadMembersView = self.view
@@ -50,11 +89,21 @@ class ThreadCreateConfirmButton(discord.ui.Button):
             thread = await channel.create_thread(
                 name=view.thread_name,
                 type=discord.ChannelType.private_thread,
-                invitable=True,
+                invitable=False,
+                auto_archive_duration=view.auto_archive_duration,
             )
             await thread.add_user(interaction.user)
             for member in view.selected_members:
                 await thread.add_user(member)
+
+            if view.spoiler:
+                try:
+                    await interaction.client.http.request(
+                        Route("PATCH", "/channels/{channel_id}", channel_id=thread.id),
+                        json={"flags": SPOILER_CHANNEL_FLAG},
+                    )
+                except discord.HTTPException as e:
+                    logger.warning("Не удалось поставить спойлер-флаг на тред %s: %s", thread.id, e)
         except discord.Forbidden:
             logger.error("Нет прав на создание приватного треда в канале %s", channel.id)
             await interaction.response.send_message(
@@ -81,7 +130,12 @@ class ThreadMembersView(discord.ui.View):
         self.thread_name = thread_name
         self.channel = channel
         self.selected_members: list[discord.Member] = []
+        self.auto_archive_duration = 1440
+        self.spoiler = False
         self.add_item(ThreadMembersSelect())
+        self.add_item(ThreadAutoArchiveSelect())
+        self.add_item(ThreadSpoilerToggleButton())
+        self.add_item(ThreadCancelButton())
         self.add_item(ThreadCreateConfirmButton())
 
 
