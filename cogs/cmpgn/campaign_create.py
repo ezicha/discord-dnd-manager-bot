@@ -1,6 +1,7 @@
 import discord
 
 from .campaign_common import GM_ROLE_PREFIX, deliver_result, logger, move_archive_to_end
+from db.campaigns_db import add_campaign_channel, create_campaign
 
 
 class CampaignModal(discord.ui.Modal, title="Новая кампания"):
@@ -99,6 +100,20 @@ class CampaignPlayersView(discord.ui.View):
             category = await guild.create_category(name=name, overwrites=overwrites)
             await move_archive_to_end(guild)
 
+            # Запись в БД создаётся сразу после категории — дальше на каждый реально
+            # созданный канал (текстовый/голосовой, оба опциональны) идёт отдельный
+            # add_campaign_channel. gm_only здесь всегда False (по умолчанию в самой
+            # функции) — в этой форме создания кампании нет тумблера "только ГМ",
+            # он появляется только позже, через /campaign edit → «Добавить канал».
+            campaign_id = await create_campaign(
+                guild_id=guild.id,
+                name=name,
+                gm_role_id=gm_role.id,
+                player_role_id=campaign_role.id,
+                category_id=category.id,
+                actor_id=interaction.user.id,
+            )
+
             text_channel = None
             if self.text_channel_name:
                 text_channel = await guild.create_text_channel(
@@ -106,10 +121,12 @@ class CampaignPlayersView(discord.ui.View):
                     category=category,
                     topic=self.text_channel_topic or None
                 )
+                await add_campaign_channel(campaign_id, text_channel.id, "text")
 
             voice_channel = None
             if self.voice_channel_name:
                 voice_channel = await guild.create_voice_channel(name=self.voice_channel_name, category=category)
+                await add_campaign_channel(campaign_id, voice_channel.id, "voice")
 
             players_list = ", ".join(p.mention for p in self.selected_players) or "никого пока не добавлено"
 

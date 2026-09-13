@@ -5,4 +5,5 @@ __pycache__/
 *.db
 deploy_listener.txt
 deploysh.txt
+run_local.bat
 data/event_announcements.json

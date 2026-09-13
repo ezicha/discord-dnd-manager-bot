@@ -10,6 +10,7 @@ from .campaign_common import (
     logger,
     slugify,
 )
+from db.campaigns_db import archive_campaign, archive_campaign_channel, get_campaign_id_by_category
 
 
 # --- Архивация одной/нескольких кампаний целиком ---
@@ -86,6 +87,10 @@ class ArchivePrefixModal(discord.ui.Modal, title="Префиксы для арх
                 category, campaign_role, gm_role = self.campaigns[chosen_name]
                 prefix = self.prefix_inputs[chosen_name].value.strip() or slugify(chosen_name)
 
+                # category.id понадобится для поиска записи в БД уже после
+                # category.delete() — сохраняем заранее.
+                category_id = category.id
+
                 moved_channels = []
                 for channel in list(category.channels):
                     await archive_channel(guild, channel, archive_category, prefix, campaign_role, gm_role)
@@ -93,6 +98,25 @@ class ArchivePrefixModal(discord.ui.Modal, title="Префиксы для арх
 
                 await category.delete()
                 archived_per_campaign.append((chosen_name, prefix, moved_channels))
+
+                # БД — по возможности, не блокируя архивацию на стороне Discord.
+                # Если кампания была создана ещё до перехода на БД (записи нет)
+                # или сам запрос к БД упал — Discord-сторона уже отработала,
+                # откатывать её не пытаемся, просто логируем и идём дальше.
+                try:
+                    campaign_id = await get_campaign_id_by_category(category_id)
+                    if campaign_id is not None:
+                        await archive_campaign(campaign_id, interaction.user.id)
+                    else:
+                        logger.warning(
+                            "Кампания «%s» (category_id=%s) не найдена в БД при архивации — "
+                            "пропускаю обновление БД, Discord-сторона уже заархивирована.",
+                            chosen_name, category_id,
+                        )
+                except Exception as db_error:
+                    logger.error(
+                        "Ошибка БД при архивации кампании «%s»: %s", chosen_name, repr(db_error)
+                    )
 
                 channels_text = ", ".join(ch.mention for ch in moved_channels) or "каналов не было"
                 archived_summary.append(f"**{chosen_name}** (префикс `{prefix}`): {channels_text}")
@@ -193,6 +217,16 @@ class SingleArchivePrefixModal(discord.ui.Modal, title="Префикс для а
                     continue
                 await archive_channel(guild, channel, archive_category, prefix, self.campaign_role, self.gm_role)
                 moved.append(channel)
+
+                # По ID канала напрямую — campaign_id тут вообще не нужен.
+                # Если канала не было в БД (кампания создана до перехода на БД) —
+                # UPDATE просто не затронет ни одной строки, без ошибки.
+                try:
+                    await archive_campaign_channel(channel.id)
+                except Exception as db_error:
+                    logger.error(
+                        "Ошибка БД при архивации канала %s: %s", channel.id, repr(db_error)
+                    )
 
             moved_text = ", ".join(ch.mention for ch in moved) or "ничего не перенесено"
             message = f"Каналы перенесены в **{ARCHIVE_CATEGORY_NAME}** с префиксом `{prefix}`: {moved_text}"

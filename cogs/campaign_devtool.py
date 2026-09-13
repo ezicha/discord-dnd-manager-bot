@@ -6,6 +6,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from cogs.cmpgn.campaign_common import ARCHIVE_CATEGORY_NAME, GM_ROLE_PREFIX, channel_select_option
+from db.campaigns_db import remove_deleted_channel
 
 logger = logging.getLogger("argus")
 
@@ -211,11 +212,20 @@ class ProceedButton(discord.ui.Button):
 
         for ch in to_delete:
             touched_roles |= _channel_roles(ch)
-            deleted_names.append(ch.name)
             try:
                 await ch.delete(reason="dev_wipe_archive: очистка архива на этапе разработки")
             except discord.HTTPException as e:
                 logger.warning("dev_wipe_archive: не удалось удалить канал %s: %s", ch.name, e)
+                continue
+
+            deleted_names.append(ch.name)
+            try:
+                await remove_deleted_channel(ch.id, interaction.user.id)
+            except Exception as e:
+                logger.warning(
+                    "dev_wipe_archive: канал %s удалён в Discord, но не обновилась БД: %s",
+                    ch.name, e,
+                )
 
         # Роль удаляем, только если она больше нигде не используется на
         # сервере — ни в одном оставшемся канале.

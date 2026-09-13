@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import asyncio
 
 import logging
+from db.connection import init_db
 
 logging.basicConfig(level=logging.INFO) # DEBUG, INFO, WARNING, ERROR
 logger = logging.getLogger("argus")
@@ -60,6 +61,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: discord.
 
 async def main():
     async with bot:
+        await init_db()
         await bot.load_extension("cogs.cmpgn.campaigns")
         await bot.load_extension("cogs.events.events")
         await bot.load_extension("cogs.dice")
