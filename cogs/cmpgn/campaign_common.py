@@ -2,6 +2,8 @@ import logging
 logger = logging.getLogger("argus")
 
 import discord
+from db.campaigns_db import get_gm_archived_campaigns as db_get_gm_archived_campaigns
+from db.campaigns_db import get_gm_campaigns as db_get_gm_campaigns
 
 # --- Константы ---
 # Вынесены сюда, чтобы при необходимости переименовать архивную категорию
@@ -262,4 +264,74 @@ def get_gm_archived_campaigns(guild: discord.Guild, member: discord.Member) -> d
 
         if archived_channels:
             campaigns[campaign_name] = (campaign_role, role, archived_channels)
+    return 
+
+
+async def resolve_gm_campaigns_from_db(guild: discord.Guild, member: discord.Member) -> dict:
+    """
+    Версия get_gm_campaigns через БД вместо парсинга имён ролей/категорий:
+    ищет по gm_role_id среди ID всех ролей участника (member.roles), а не по
+    префиксу "ГМ: " в названии — работает даже если роль переименована.
+    Возвращает { "Название кампании": (category, campaign_role, gm_role) },
+    в том же формате, что и старая get_gm_campaigns — заменяет её использование
+    в CampaignGroup; сама get_gm_campaigns остаётся в файле нетронутой как
+    путь отката, если с БД что-то пойдёт не так.
+
+    Кампании, чья категория или одна из ролей были удалены в Discord мимо
+    бота (не через /campaign archive), в результат не попадают — просто
+    пропускаются с предупреждением в логах, а не роняют всю команду.
+    """
+    gm_role_ids = [r.id for r in member.roles]
+    rows = await db_get_gm_campaigns(gm_role_ids)
+
+    campaigns = {}
+    for row in rows:
+        category = guild.get_channel(row["category_id"])
+        campaign_role = guild.get_role(row["player_role_id"])
+        gm_role = guild.get_role(row["gm_role_id"])
+        if category is None or campaign_role is None or gm_role is None:
+            logger.warning(
+                "Кампания «%s» (id=%s) из БД не резолвится в Discord-объекты "
+                "(категория или роль удалены мимо бота) — пропускаю.",
+                row["name"], row["id"],
+            )
+            continue
+        campaigns[row["name"]] = (category, campaign_role, gm_role)
+    return campaigns
+
+
+async def resolve_gm_archived_campaigns_from_db(guild: discord.Guild, member: discord.Member) -> dict:
+    """
+    Версия get_gm_archived_campaigns через БД — та же идея, что и у
+    resolve_gm_campaigns_from_db, но для заархивированных кампаний.
+
+    category_id у заархивированной кампании в БД всегда NULL (обнуляется при
+    archive_campaign) — категорию не резолвим вообще, она и не нужна для
+    resurrect. Список заархивированных каналов по-прежнему ищется через
+    get_archived_channels_for_campaign (по правам доступа в "Архиве"), а не
+    через campaign_channels в БД — так надёжнее для кампаний, заведённых до
+    перехода на БД, у которых записей о каналах может не быть вовсе.
+
+    campaign_role может не резолвиться (например, роль участника удалили
+    вручную) — это не блокирует кампанию, downstream-код (ResurrectModal)
+    уже умеет создавать её заново при отсутствии. А вот без gm_role кампанию
+    пропускаем — она используется без проверки на None в остальном коде.
+    """
+    gm_role_ids = [r.id for r in member.roles]
+    rows = await db_get_gm_archived_campaigns(gm_role_ids)
+
+    campaigns = {}
+    for row in rows:
+        gm_role = guild.get_role(row["gm_role_id"])
+        if gm_role is None:
+            logger.warning(
+                "Заархивированная кампания «%s» (id=%s): роль ГМа не найдена в Discord — пропускаю.",
+                row["name"], row["id"],
+            )
+            continue
+        campaign_role = guild.get_role(row["player_role_id"])
+
+        archived_channels = get_archived_channels_for_campaign(guild, campaign_role, gm_role)
+        if archived_channels:
+            campaigns[row["name"]] = (campaign_role, gm_role, archived_channels)
     return campaigns

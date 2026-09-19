@@ -12,6 +12,12 @@ from .campaign_common import (
     logger,
     resurrect_channel,
 )
+from db.campaigns_db import (
+    add_campaign_channel,
+    get_campaign_id_by_category,
+    set_campaign_channel_gm_only,
+    unarchive_campaign_channel,
+)
 
 
 # --- Выбор кампании для редактирования (если их несколько) ---
@@ -190,6 +196,13 @@ class RestoreChannelRenameModal(discord.ui.Modal, title="Вернуть кана
                 if channel.name != old_name:
                     renamed_from[channel.id] = old_name
 
+                try:
+                    await unarchive_campaign_channel(channel.id)
+                except Exception as db_error:
+                    logger.error(
+                        "Ошибка БД при восстановлении канала %s: %s", channel.id, repr(db_error)
+                    )
+
             channel_lines = [
                 f"{renamed_from[ch.id]} → {ch.mention}" if ch.id in renamed_from else ch.mention
                 for ch in restored
@@ -295,6 +308,20 @@ class AddChannelModal(discord.ui.Modal, title="Новый канал"):
                 )
 
             logger.debug("канал создан: %s", channel)
+
+            try:
+                campaign_id = await get_campaign_id_by_category(self.category.id)
+                if campaign_id is not None:
+                    await add_campaign_channel(campaign_id, channel.id, self.channel_type, self.gm_only)
+                else:
+                    logger.warning(
+                        "Категория %s не найдена в БД при добавлении канала — "
+                        "пропускаю запись в БД, канал уже создан в Discord.",
+                        self.category.id,
+                    )
+            except Exception as db_error:
+                logger.error("Ошибка БД при добавлении канала %s: %s", channel.id, repr(db_error))
+
             await deliver_result(interaction, [channel], f"Канал {channel.mention} создан.")
             logger.debug("сообщение отправлено")
         except Exception as e:
@@ -406,6 +433,13 @@ class ChangeAccessApplyView(discord.ui.View):
                 base_overwrites=self.channel.overwrites,
             )
             await self.channel.edit(overwrites=overwrites)
+
+            try:
+                await set_campaign_channel_gm_only(self.channel.id, self.gm_only)
+            except Exception as db_error:
+                logger.error(
+                    "Ошибка БД при изменении доступа канала %s: %s", self.channel.id, repr(db_error)
+                )
 
             access_text = "только ГМ может писать, остальные — только просмотр" if self.gm_only else "могут писать все участники"
             await deliver_result(interaction, [self.channel], f"Доступ для {self.channel.mention} обновлён: {access_text}.")

@@ -10,6 +10,7 @@ from .campaign_common import (
     move_archive_to_end,
     resurrect_channel,
 )
+from db.campaigns_db import get_campaign_id_by_gm_role, resurrect_campaign, unarchive_campaign_channel
 
 # Поле "Название кампании" всегда занимает один из 5 слотов модалки Discord —
 # на переименование отдельных каналов остаётся максимум 4.
@@ -178,6 +179,26 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
             category = await guild.create_category(name=final_name, overwrites=overwrites)
             await move_archive_to_end(guild)
 
+            # БД: ищем кампанию по gm_role (category_id у заархивированной кампании
+            # обнулён при archive_campaign, так что искать по категории уже нельзя —
+            # её и не было до этой строки). Сбой или отсутствие записи (кампания
+            # создана до перехода на БД) не должны блокировать саму Discord-сторону
+            # восстановления — она к этому моменту уже фактически совершена.
+            try:
+                campaign_id = await get_campaign_id_by_gm_role(gm_role.id)
+                if campaign_id is not None:
+                    await resurrect_campaign(campaign_id, category.id, interaction.user.id)
+                else:
+                    logger.warning(
+                        "Кампания «%s» (gm_role_id=%s) не найдена в БД при восстановлении — "
+                        "пропускаю обновление БД, Discord-сторона уже восстановлена.",
+                        final_name, gm_role.id,
+                    )
+            except Exception as db_error:
+                logger.error(
+                    "Ошибка БД при восстановлении кампании «%s»: %s", final_name, repr(db_error)
+                )
+
             restored = []
             renamed_from = {}
             for channel in self.channels:
@@ -188,6 +209,15 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
                 restored.append(channel)
                 if channel.name != old_name:
                     renamed_from[channel.id] = old_name
+
+                # По ID канала напрямую, campaign_id тут не нужен — тот же принцип,
+                # что и в архивации: отсутствие строки в БД просто не даёт эффекта.
+                try:
+                    await unarchive_campaign_channel(channel.id)
+                except Exception as db_error:
+                    logger.error(
+                        "Ошибка БД при восстановлении канала %s: %s", channel.id, repr(db_error)
+                    )
 
             channel_lines = [
                 f"{renamed_from[ch.id]} → {ch.mention}" if ch.id in renamed_from else ch.mention

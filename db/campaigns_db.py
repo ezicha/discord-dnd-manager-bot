@@ -56,6 +56,20 @@ async def get_campaign_id_by_category(category_id: int) -> int | None:
     return row["id"] if row else None
 
 
+async def get_campaign_id_by_gm_role(gm_role_id: int, status: str = "archived") -> int | None:
+    """Находит id кампании по её gm_role_id, с фильтром по статусу (по умолчанию
+    'archived' — нужно при resurrect, где на руках есть только Discord-объект
+    роли ГМа, а campaign_id ещё не известен, пока get_gm_archived_campaigns
+    не переведён на поиск через БД). Роль ГМа не меняется при архивации, в
+    отличие от category_id — поэтому здесь ищем по роли, а не по категории.
+
+    Переиспользует уже существующий _get_campaigns_by_gm_roles — просто со
+    списком из одной роли, без дублирования SQL-запроса.
+    """
+    rows = await _get_campaigns_by_gm_roles([gm_role_id], status)
+    return rows[0]["id"] if rows else None
+
+
 async def _get_campaigns_by_gm_roles(gm_role_ids: list[int], status: str):
     if not gm_role_ids:
         return []
@@ -240,4 +254,16 @@ async def remove_deleted_channel(discord_channel_id: int, actor_id: int) -> None
         )
         await db.execute("DELETE FROM campaigns WHERE id = ?", (campaign_id,))
 
+    await db.commit()
+
+
+async def set_campaign_channel_gm_only(discord_channel_id: int, gm_only: bool) -> None:
+    """Обновляет флаг gm_only у канала — используется в /campaign edit → «Изменить
+    доступ», когда меняют, кто может писать в уже существующем канале кампании.
+    """
+    db = await get_connection()
+    await db.execute(
+        "UPDATE campaign_channels SET gm_only = ? WHERE discord_channel_id = ?",
+        (int(gm_only), discord_channel_id),
+    )
     await db.commit()

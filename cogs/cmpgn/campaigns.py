@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 
 from .campaign_archive import ArchiveSelectView
-from .campaign_common import get_gm_archived_campaigns, get_gm_campaigns, logger
+from .campaign_common import logger, resolve_gm_archived_campaigns_from_db, resolve_gm_campaigns_from_db
 from .campaign_create import CampaignModal
 from .campaign_edit import CampaignEditMenuView, CampaignEditSelectView
 from .campaign_resurrect import MAX_CHANNELS_FOR_RENAME, ResurrectChannelPickView, ResurrectModal, ResurrectSelectView
@@ -36,7 +36,7 @@ class CampaignGroup(discord.app_commands.Group):
         member = interaction.user
 
         try:
-            campaigns = get_gm_campaigns(guild, member)
+            campaigns = await resolve_gm_campaigns_from_db(guild, member)
 
             if not campaigns:
                 await interaction.response.send_message(
@@ -59,7 +59,7 @@ class CampaignGroup(discord.app_commands.Group):
         member = interaction.user
 
         try:
-            campaigns = get_gm_campaigns(guild, member)
+            campaigns = await resolve_gm_archived_campaigns_from_db(guild, member)
 
             if not campaigns:
                 await interaction.response.send_message(
@@ -85,7 +85,7 @@ class CampaignGroup(discord.app_commands.Group):
         member = interaction.user
 
         try:
-            campaigns = get_gm_archived_campaigns(guild, member)
+            campaigns = await resolve_gm_archived_campaigns_from_db(guild, member)
 
             if not campaigns:
                 await interaction.response.send_message(
