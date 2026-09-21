@@ -169,6 +169,22 @@ async def resurrect_campaign(campaign_id: int, category_id: int, actor_id: int) 
     await db.commit()
 
 
+async def get_campaign_channel_gm_only(discord_channel_id: int) -> bool | None:
+    """Возвращает текущее значение gm_only для канала по его Discord ID, или
+    None, если записи в campaign_channels нет (например, канал заведён ещё
+    до перехода на БД). Используется при resurrect, чтобы восстановить канал
+    с тем же режимом доступа, что был у него до архивации, а не всегда как
+    "пишут все".
+    """
+    db = await get_connection()
+    cursor = await db.execute(
+        "SELECT gm_only FROM campaign_channels WHERE discord_channel_id = ?",
+        (discord_channel_id,),
+    )
+    row = await cursor.fetchone()
+    return bool(row["gm_only"]) if row else None
+
+
 async def add_campaign_channel(
 campaign_id: int,
 discord_channel_id: int,

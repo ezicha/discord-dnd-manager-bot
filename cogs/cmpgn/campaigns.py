@@ -59,7 +59,7 @@ class CampaignGroup(discord.app_commands.Group):
         member = interaction.user
 
         try:
-            campaigns = await resolve_gm_archived_campaigns_from_db(guild, member)
+            campaigns = await resolve_gm_campaigns_from_db(guild, member)
 
             if not campaigns:
                 await interaction.response.send_message(

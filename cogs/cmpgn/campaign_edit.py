@@ -17,6 +17,7 @@ from db.campaigns_db import (
     get_campaign_id_by_category,
     set_campaign_channel_gm_only,
     unarchive_campaign_channel,
+    get_campaign_channel_gm_only,
 )
 
 
@@ -189,8 +190,20 @@ class RestoreChannelRenameModal(discord.ui.Modal, title="Вернуть кана
                 field = self.name_inputs.get(channel.id)
                 new_name = field.value.strip() if field else None
                 old_name = channel.name
+
+                try:
+                    gm_only = await get_campaign_channel_gm_only(channel.id)
+                except Exception as db_error:
+                    logger.error(
+                        "Ошибка БД при чтении gm_only канала %s: %s", channel.id, repr(db_error)
+                    )
+                    gm_only = None
+                if gm_only is None:
+                    gm_only = False  # нет записи в БД (канал до перехода на БД) — старое поведение
+
                 await resurrect_channel(
-                    guild, channel, self.category, self.campaign_role, self.gm_role, new_name=new_name
+                    guild, channel, self.category, self.campaign_role, self.gm_role,
+                    new_name=new_name, gm_only=gm_only,
                 )
                 restored.append(channel)
                 if channel.name != old_name:

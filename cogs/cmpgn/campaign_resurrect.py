@@ -10,7 +10,7 @@ from .campaign_common import (
     move_archive_to_end,
     resurrect_channel,
 )
-from db.campaigns_db import get_campaign_id_by_gm_role, resurrect_campaign, unarchive_campaign_channel
+from db.campaigns_db import get_campaign_channel_gm_only, get_campaign_id_by_gm_role, resurrect_campaign, unarchive_campaign_channel
 
 # Поле "Название кампании" всегда занимает один из 5 слотов модалки Discord —
 # на переименование отдельных каналов остаётся максимум 4.
@@ -205,13 +205,25 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
                 field = self.channel_name_inputs.get(channel.id)
                 new_channel_name = field.value.strip() if field else None
                 old_name = channel.name
-                await resurrect_channel(guild, channel, category, campaign_role, gm_role, new_name=new_channel_name)
+
+                try:
+                    gm_only = await get_campaign_channel_gm_only(channel.id)
+                except Exception as db_error:
+                    logger.error(
+                        "Ошибка БД при чтении gm_only канала %s: %s", channel.id, repr(db_error)
+                    )
+                    gm_only = None
+                if gm_only is None:
+                    gm_only = False  # нет записи в БД (канал до перехода на БД) — старое поведение
+
+                await resurrect_channel(
+                    guild, channel, category, campaign_role, gm_role,
+                    new_name=new_channel_name, gm_only=gm_only,
+                )
                 restored.append(channel)
                 if channel.name != old_name:
                     renamed_from[channel.id] = old_name
 
-                # По ID канала напрямую, campaign_id тут не нужен — тот же принцип,
-                # что и в архивации: отсутствие строки в БД просто не даёт эффекта.
                 try:
                     await unarchive_campaign_channel(channel.id)
                 except Exception as db_error:
@@ -235,8 +247,6 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
                 f"Роль: {campaign_role.mention}\n"
                 f"Каналы: {restored_text}\n"
                 f"{note}"
-                f"Индивидуальный доступ (например «только ГМ»), если он был у канала до архивации, "
-                f"из архива не восстанавливается автоматически — поправить его можно через /campaign edit."
             )
             await deliver_result(interaction, restored, message)
         except Exception as e:

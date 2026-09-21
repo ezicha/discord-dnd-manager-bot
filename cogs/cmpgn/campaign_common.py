@@ -154,26 +154,26 @@ async def archive_channel(guild, channel, archive_category, prefix, campaign_rol
     await channel.edit(overwrites=overwrites)
     return channel
 
-async def resurrect_channel(guild, channel, category, campaign_role, gm_role, new_name: str | None = None):
+async def resurrect_channel(guild, channel, category, campaign_role, gm_role, new_name: str | None = None, gm_only: bool = False):
     """
-    Возвращает один заархивированный канал обратно в категорию кампании
-    и восстанавливает обычный доступ (писать могут все участники кампании).
-
-    Индивидуальные настройки доступа канала (например «только ГМ»), если они
-    были у него до архивации, не сохраняются — при необходимости их можно
-    заново включить через /campaign edit → «Изменить доступ».
+    Возвращает один заархивированный канал обратно в категорию кампании и
+    восстанавливает доступ. Если gm_only=True (обычно — значение из БД,
+    campaign_channels.gm_only, зафиксированное на момент архивации), доступ
+    восстанавливается как "только ГМ пишет/говорит" — тем же построением
+    overwrites, что и при создании канала и в /campaign edit → «Изменить
+    доступ» (build_access_overwrites). Если gm_only не передан (по умолчанию
+    False) — доступ восстанавливается как обычный, для всех участников.
 
     Если передан new_name (и он отличается от текущего) — канал заодно
     переименовывается тем же вызовом edit(), без отдельного запроса к API.
     Если new_name не передан или пуст — имя (вместе с префиксом архивации)
-    остаётся как есть, переименовать его потом можно через «Редактировать канал».
+    остаётся как есть, переименовать его можно через «Редактировать канал».
     """
-    overwrites = channel.overwrites
-    overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
-    if campaign_role:
-        overwrites[campaign_role] = discord.PermissionOverwrite(view_channel=True)
-    if gm_role:
-        overwrites[gm_role] = discord.PermissionOverwrite(view_channel=True, manage_channels=True)
+    is_voice = isinstance(channel, discord.VoiceChannel)
+    overwrites = build_access_overwrites(
+        guild, campaign_role, gm_role, gm_only, is_voice,
+        base_overwrites=channel.overwrites,
+    )
 
     edit_kwargs = dict(category=category, overwrites=overwrites, sync_permissions=False)
     if new_name and new_name != channel.name:

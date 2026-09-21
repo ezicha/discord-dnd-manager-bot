@@ -7,7 +7,7 @@ import asyncio
 import logging
 from db.connection import init_db
 
-logging.basicConfig(level=logging.INFO) # DEBUG, INFO, WARNING, ERROR
+logging.basicConfig(level=logging.DEBUG) # DEBUG, INFO, WARNING, ERROR
 logger = logging.getLogger("argus")
 
 load_dotenv()
