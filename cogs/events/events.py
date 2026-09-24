@@ -6,11 +6,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from .event_announcements import delete_event_record, get_all_records
+from db.events_db import delete_event_record, get_all_scheduled_event_ids
 from .event_common import (
     build_event_preview_embed,
     generate_calendar_text_for_week,
     get_campaign_for_channel,
+    get_campaign_id_for_channel,
     logger,
     user_role_in_campaign,
 )
@@ -50,7 +51,8 @@ class EventGroup(app_commands.Group):
                 )
                 return
 
-            view = EventCreateView(campaign_name, voice_channels, text_channels, interaction.user)
+            campaign_id = await get_campaign_id_for_channel(interaction.channel)
+            view = EventCreateView(campaign_name, campaign_id, voice_channels, text_channels, interaction.user)
             embed = build_event_preview_embed(
                 campaign_name, None, None, None,
                 voice_channels[0] if len(voice_channels) == 1 else None, None,
@@ -169,12 +171,8 @@ class EventsCog(commands.Cog):
 
     @tasks.loop(hours=24 * 7)
     async def cleanup_stale_event_records(self) -> None:
-        """Раз в неделю (и сразу при старте бота) чистит record_event-записи,
-        чей event_id больше не встречается ни в одном guild.scheduled_events —
-        событие либо состоялось и пропало из списка активных, либо было удалено
-        не через /event cancel (например, через /dev_wipe_archive)."""
-        records = get_all_records()
-        if not records:
+        ids = await get_all_scheduled_event_ids()
+        if not ids:
             return
 
         live_ids = {
@@ -183,13 +181,13 @@ class EventsCog(commands.Cog):
             for ev in guild.scheduled_events
         }
         removed = 0
-        for event_id_str in list(records.keys()):
-            if int(event_id_str) not in live_ids:
-                delete_event_record(int(event_id_str))
+        for event_id in ids:
+            if event_id not in live_ids:
+                await delete_event_record(event_id)
                 removed += 1
 
         if removed:
-            logger.info("Очистка event_announcements.json: удалено %d устаревших записей", removed)
+            logger.info("Очистка event_announcements: удалено %d устаревших записей", removed)
 
     @cleanup_stale_event_records.before_loop
     async def before_cleanup(self) -> None:

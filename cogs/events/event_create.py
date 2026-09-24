@@ -8,7 +8,7 @@ from datetime import timedelta
 
 import discord
 
-from .event_announcements import get_event_record, record_event
+from db.events_db import get_event_record, record_event, update_event_announcement
 from .event_common import (
     MAX_DAYS_AHEAD,
     SERVER_TZ,
@@ -198,7 +198,9 @@ class CreateEventButton(discord.ui.Button):
         else:
             announce_note = " (анонс не отправлен — нет текстового канала кампании)"
 
-        record_event(event.id, interaction.user.id, announce_channel_id, announce_message_id)
+        await record_event(
+            event.id, v.campaign_id, interaction.user.id, announce_channel_id, announce_message_id
+        )
 
         for item in v.children:
             item.disabled = True
@@ -220,17 +222,16 @@ class CreateEventButton(discord.ui.Button):
             await interaction.response.send_message(error, ephemeral=True)
             return
 
-        old_record = get_event_record(event.id)
-        creator_id = old_record["creator_id"] if old_record else interaction.user.id
-        old_channel_id = old_record["channel_id"] if old_record else None
-        old_message_id = old_record["message_id"] if old_record else None
+        old_record = await get_event_record(event.id)
+        old_channel_id = old_record["announcement_channel_id"] if old_record else None
+        old_message_id = old_record["announcement_message_id"] if old_record else None
 
         new_channel_id = v.selected_announce_channel.id if v.selected_announce_channel else None
         announce_note = ""
 
         if old_channel_id and old_message_id and old_channel_id == new_channel_id:
+            # канал анонса не поменялся — просто обновляем то же сообщение, в БД менять нечего
             channel = interaction.guild.get_channel(old_channel_id)
-            new_message_id = old_message_id
             if channel is not None:
                 try:
                     message = await channel.fetch_message(old_message_id)
@@ -238,6 +239,7 @@ class CreateEventButton(discord.ui.Button):
                 except (discord.NotFound, discord.Forbidden):
                     announce_note = " (не удалось обновить старое сообщение-анонс)"
         else:
+            # канал анонса поменялся (или анонса не было/не стало) — старое удаляем, новое постим при необходимости
             if old_channel_id and old_message_id:
                 old_channel = interaction.guild.get_channel(old_channel_id)
                 if old_channel is not None:
@@ -257,7 +259,7 @@ class CreateEventButton(discord.ui.Button):
             else:
                 announce_note = " (анонс не отправлен — нет текстового канала кампании)"
 
-        record_event(event.id, creator_id, new_channel_id, new_message_id)
+            await update_event_announcement(event.id, new_channel_id, new_message_id)
 
         for item in v.children:
             item.disabled = True
@@ -284,13 +286,16 @@ class EventCreateView(discord.ui.View):
     def __init__(
         self,
         campaign_name: str,
+        campaign_id: int | None,
         voice_channels: list[discord.VoiceChannel],
         text_channels: list[discord.TextChannel],
         requester: discord.Member,
         existing_event: discord.ScheduledEvent | None = None,
+        existing_announcement_channel_id: int | None = None,
     ):
         super().__init__(timeout=600)
         self.campaign_name = campaign_name
+        self.campaign_id = campaign_id
         self.voice_channels = voice_channels
         self.text_channels = text_channels
         self.requester = requester
@@ -309,9 +314,9 @@ class EventCreateView(discord.ui.View):
                 and existing_event.channel in voice_channels
                 else (voice_channels[0] if len(voice_channels) == 1 else None)
             )
-            record = get_event_record(existing_event.id)
-            record_channel_id = record["channel_id"] if record else None
-            preselected_announce = next((ch for ch in text_channels if ch.id == record_channel_id), None)
+            preselected_announce = next(
+                (ch for ch in text_channels if ch.id == existing_announcement_channel_id), None
+            )
             self.selected_announce_channel = (
                 preselected_announce or (text_channels[0] if len(text_channels) == 1 else None)
             )

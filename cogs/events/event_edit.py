@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import discord
 
-from .event_announcements import get_event_record
-from .event_common import SERVER_TZ, can_manage_event
+from db.events_db import get_event_record
+from .event_common import SERVER_TZ, can_manage_event, get_campaign_id_for_channel
 from .event_create import EventCreateView
 
 
@@ -27,7 +27,7 @@ class EventEditSelect(discord.ui.Select):
         options = [
             discord.SelectOption(
                 label=ev.name[:100],
-                description=ev.start_time.astimezone(SERVER_TZ).strftime("%d.%m, %H:%M MSK"),
+                description=ev.start_time.astimezone(SERVER_TZ).strftime("%d.%m, %H:%M NSK"),
                 value=str(ev.id),
             )
             for ev in events[:25]
@@ -36,7 +36,7 @@ class EventEditSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         event = self._events_by_id[self.values[0]]
-        record = get_event_record(event.id)
+        record = await get_event_record(event.id)
         creator_id = record["creator_id"] if record else None
         if not can_manage_event(interaction.user, self.campaign_name, creator_id):
             await interaction.response.send_message(
@@ -49,9 +49,13 @@ class EventEditSelect(discord.ui.Select):
         all_channels = category.channels if category else []
         voice_channels = [ch for ch in all_channels if isinstance(ch, discord.VoiceChannel)]
 
+        campaign_id = await get_campaign_id_for_channel(interaction.channel)
+        old_channel_id = record["announcement_channel_id"] if record else None
+
         view = EventCreateView(
-            self.campaign_name, voice_channels, self.text_channels, interaction.user,
+            self.campaign_name, campaign_id, voice_channels, self.text_channels, interaction.user,
             existing_event=event,
+            existing_announcement_channel_id=old_channel_id,
         )
         await interaction.response.edit_message(content=None, embed=view.build_embed(), view=view)
 

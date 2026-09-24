@@ -7,6 +7,7 @@ from __future__ import annotations
 import calendar as calendar_module
 import logging
 from datetime import date, datetime, timedelta, timezone
+from db.campaigns_db import get_campaign_id_by_category
 
 import discord
 
@@ -100,6 +101,14 @@ def get_campaign_for_channel(channel: discord.abc.GuildChannel) -> str | None:
     """Определяет кампанию по каналу вызова команды: название категории == название кампании."""
     category = channel.category
     return category.name if category else None
+
+
+async def get_campaign_id_for_channel(channel: discord.abc.GuildChannel) -> int | None:
+    """campaign_id из БД по категории канала — нужен для record_event при создании события."""
+    category = channel.category
+    if category is None:
+        return None
+    return await get_campaign_id_by_category(category.id)
 
 
 def user_role_in_campaign(member: discord.Member, campaign_name: str) -> str | None:
