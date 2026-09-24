@@ -6,7 +6,11 @@ from discord import app_commands
 from discord.ext import commands
 
 from cogs.cmpgn.campaign_common import ARCHIVE_CATEGORY_NAME, GM_ROLE_PREFIX, channel_select_option
-from db.campaigns_db import remove_deleted_channel
+from db.campaigns_db import (
+    remove_deleted_channel,
+    get_orphaned_campaign_history,
+    delete_orphaned_campaign_history,
+)
 
 logger = logging.getLogger("argus")
 
@@ -172,6 +176,82 @@ class KeepRolesView(discord.ui.View):
         self.add_item(self.select)
         self.add_item(ProceedRolesButton())
 
+
+class KeepHistorySelect(discord.ui.Select):
+    """Выбор кампаний (по логу), которые НЕ нужно чистить. Логика та же, что у KeepChannelsSelect."""
+
+    def __init__(self, orphaned_groups: list[dict]):
+        self.orphaned_groups = orphaned_groups[:25]
+        options = [
+            discord.SelectOption(
+                label=f"Кампания id={g['campaign_id']} ({g['cnt']} записей)",
+                value=str(g["campaign_id"]),
+                description=f"{g['first_at'][:10]} — {g['last_at'][:10]}",
+            )
+            for g in self.orphaned_groups
+        ]
+        super().__init__(
+            placeholder="Кампании (по логу), которые НЕ нужно чистить",
+            min_values=0,
+            max_values=len(options),
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        chosen = [g for g in self.orphaned_groups if str(g["campaign_id"]) in self.values]
+        text = ", ".join(f"id={g['campaign_id']}" for g in chosen) if chosen else "ничего — значит, очистится лог всех показанных кампаний"
+        await interaction.response.edit_message(
+            content=f"Оставить: {text}.\nКогда закончишь выбор — нажми «Готово».",
+            view=self.view,
+        )
+
+
+class ProceedHistoryButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Готово", style=discord.ButtonStyle.primary, row=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: "KeepHistoryView" = self.view
+        keep_ids = {int(v) for v in view.select.values}
+        to_clear = [g for g in view.select.orphaned_groups if g["campaign_id"] not in keep_ids]
+
+        if not to_clear:
+            await interaction.response.edit_message(
+                content="Нечего чистить — все показанные кампании выбраны для сохранения.",
+                view=None,
+            )
+            return
+
+        names = "\n".join(f"- id={g['campaign_id']} ({g['cnt']} записей)" for g in to_clear)
+        confirm_view = ConfirmWipeView(interaction.user.id)
+        await interaction.response.edit_message(
+            content=f"Будет очищен лог **{len(to_clear)}** кампаний:\n{names}\n\nЭто необратимо. Подтвердить?",
+            view=confirm_view,
+        )
+        await confirm_view.wait()
+
+        if not confirm_view.confirmed:
+            return
+
+        campaign_ids = [g["campaign_id"] for g in to_clear]
+        try:
+            deleted_count = await delete_orphaned_campaign_history(campaign_ids)
+        except Exception as e:
+            logger.warning("dev_clear_history: не удалось очистить историю: %s", e)
+            await interaction.followup.send(f"Не получилось очистить: {e}", ephemeral=True)
+            return
+
+        await interaction.followup.send(f"Готово. Удалено записей истории: {deleted_count}.", ephemeral=True)
+
+
+class KeepHistoryView(discord.ui.View):
+    def __init__(self, orphaned_groups: list[dict]):
+        super().__init__(timeout=120)
+        self.select = KeepHistorySelect(orphaned_groups)
+        self.add_item(self.select)
+        self.add_item(ProceedHistoryButton())
+
+
 class ProceedButton(discord.ui.Button):
     def __init__(self):
         super().__init__(label="Готово", style=discord.ButtonStyle.primary, row=1)
@@ -336,6 +416,41 @@ class DevGroup(app_commands.Group):
         await interaction.response.send_message(
             f"Выбери роли, которые НЕ нужно снимать:{note}",
             view=KeepRolesView(campaign_roles),
+            ephemeral=True,
+        )
+
+
+    @app_commands.command(
+        name="clear_history",
+        description="Очистить лог действий campaign_history для уже удалённых тестовых кампаний",
+    )
+    async def clear_history(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("Только на сервере.", ephemeral=True)
+            return
+
+        if interaction.user.id != guild.owner_id:
+            await interaction.response.send_message(
+                "Эта команда доступна только владельцу сервера.", ephemeral=True
+            )
+            return
+
+        orphaned_groups = await get_orphaned_campaign_history()
+        if not orphaned_groups:
+            await interaction.response.send_message("Осиротевших записей в логе нет.", ephemeral=True)
+            return
+
+        note = ""
+        if len(orphaned_groups) > 25:
+            note = (
+                f"\n(осиротевших кампаний в логе {len(orphaned_groups)}, покажу первые 25 — "
+                "остальные в этот раз не тронутся)"
+            )
+
+        await interaction.response.send_message(
+            f"Выбери кампании (по логу), которые НЕ нужно чистить:{note}",
+            view=KeepHistoryView(orphaned_groups),
             ephemeral=True,
         )
 

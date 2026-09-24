@@ -283,3 +283,47 @@ async def set_campaign_channel_gm_only(discord_channel_id: int, gm_only: bool) -
         (int(gm_only), discord_channel_id),
     )
     await db.commit()
+
+
+async def get_orphaned_campaign_history() -> list[dict]:
+    """
+    Группы записей campaign_history, чей campaign_id больше не существует
+    в таблице campaigns (кампания реально удалена, например через
+    /dev wipe_archive). Одна строка результата — один campaign_id.
+    """
+    db = await get_connection()
+    cursor = await db.execute(
+        """
+        SELECT campaign_id, COUNT(*) AS cnt,
+               MIN(created_at) AS first_at, MAX(created_at) AS last_at
+        FROM campaign_history
+        WHERE campaign_id NOT IN (SELECT id FROM campaigns)
+        GROUP BY campaign_id
+        ORDER BY last_at DESC
+        """
+    )
+    rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def delete_orphaned_campaign_history(campaign_ids: list[int]) -> int:
+    """
+    Удаляет записи campaign_history для переданных campaign_id — но только
+    те, что всё ещё "осиротевшие" на момент удаления (доп. проверка на
+    случай, если между показом списка и подтверждением что-то изменилось).
+    Возвращает количество реально удалённых строк.
+    """
+    if not campaign_ids:
+        return 0
+    db = await get_connection()
+    placeholders = ",".join("?" for _ in campaign_ids)
+    cursor = await db.execute(
+        f"""
+        DELETE FROM campaign_history
+        WHERE campaign_id IN ({placeholders})
+          AND campaign_id NOT IN (SELECT id FROM campaigns)
+        """,
+        campaign_ids,
+    )
+    await db.commit()
+    return cursor.rowcount
