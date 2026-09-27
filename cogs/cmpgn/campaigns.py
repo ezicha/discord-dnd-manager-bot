@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from .campaign_archive import ArchiveSelectView
 from .campaign_common import logger, resolve_gm_archived_campaigns_from_db, resolve_gm_campaigns_from_db
@@ -7,6 +7,7 @@ from .campaign_create import CampaignModal
 from .campaign_edit import CampaignEditMenuView, CampaignEditSelectView
 from .campaign_resurrect import MAX_CHANNELS_FOR_RENAME, ResurrectChannelPickView, ResurrectModal, ResurrectSelectView
 
+from db.campaigns_db import get_all_campaign_channels, remove_deleted_channel
 
 class CampaignGroup(discord.app_commands.Group):
     """
@@ -124,11 +125,33 @@ class Campaigns(commands.Cog):
         self.bot = bot
         self.campaign_group = CampaignGroup()
         self.bot.tree.add_command(self.campaign_group)
+        self.cleanup_stale_campaign_channels.start()
 
     async def cog_unload(self):
-        # Симметрично add_command в __init__ — иначе при перезагрузке кога (reload)
-        # группа останется висеть в дереве команд задвоенной.
         self.bot.tree.remove_command(self.campaign_group.name)
+        self.cleanup_stale_campaign_channels.cancel()
+
+    @tasks.loop(hours=24 * 7)
+    async def cleanup_stale_campaign_channels(self) -> None:
+        rows = await get_all_campaign_channels()
+        if not rows:
+            return
+
+        removed = 0
+        for row in rows:
+            if self.bot.get_channel(row["discord_channel_id"]) is None:
+                # Канал удалили в Discord мимо бота (не через /campaign archive
+                # и не через /dev wipe_archive) — remove_deleted_channel сам решит,
+                # надо ли заодно снести и саму кампанию, если каналов не осталось.
+                await remove_deleted_channel(row["discord_channel_id"], self.bot.user.id)
+                removed += 1
+
+        if removed:
+            logger.info("Очистка campaign_channels: удалено %d устаревших записей", removed)
+
+    @cleanup_stale_campaign_channels.before_loop
+    async def before_cleanup(self) -> None:
+        await self.bot.wait_until_ready()
 
 
 async def setup(bot: commands.Bot):

@@ -285,6 +285,16 @@ async def set_campaign_channel_gm_only(discord_channel_id: int, gm_only: bool) -
     await db.commit()
 
 
+async def get_all_campaign_channels():
+    """Возвращает все строки campaign_channels, независимо от статуса —
+    используется периодической самоочисткой, которая сверяет их с реальным
+    состоянием Discord (bot.get_channel).
+    """
+    db = await get_connection()
+    cursor = await db.execute("SELECT * FROM campaign_channels")
+    return await cursor.fetchall()
+
+
 async def get_orphaned_campaign_history() -> list[dict]:
     """
     Группы записей campaign_history, чей campaign_id больше не существует
