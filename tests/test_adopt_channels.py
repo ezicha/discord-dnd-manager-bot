@@ -19,9 +19,10 @@ CATEGORY_A = 900
 CATEGORY_B = 901
 
 
-def make_channel(channel_id, category_id, *, players_can_write=True):
-    """Поддельный текстовый канал. players_can_write=False — «только ГМ пишет»."""
-    guild = SimpleNamespace(get_role=lambda rid: SimpleNamespace(id=rid))
+def make_channel(channel_id, category_id, *, players_can_write=True, player_role_missing=False):
+    """Поддельный текстовый канал. players_can_write=False — «только ГМ пишет».
+    player_role_missing=True — роль игроков кампании удалена с сервера."""
+    guild = SimpleNamespace(get_role=lambda rid: None if player_role_missing else SimpleNamespace(id=rid))
     overwrite = (
         discord.PermissionOverwrite(view_channel=True)
         if players_can_write
@@ -145,15 +146,44 @@ def test_weekly_moves_channel_to_other_campaign():
     async def scenario(conn):
         camp_a = await add_campaign(conn, CATEGORY_A, PLAYER_ROLE_A)
         camp_b = await add_campaign(conn, CATEGORY_B, PLAYER_ROLE_B)
-        await add_campaign_channel(camp_a, 5, "text", gm_only=True)
-        # Канал 5 был в кампании A, а теперь лежит в категории кампании B.
-        bot = make_bot({CATEGORY_A: [], CATEGORY_B: [make_channel(5, CATEGORY_B)]})
+        await add_campaign_channel(camp_a, 5, "text", gm_only=False)
+        # Канал 5 был в кампании A, а теперь лежит в категории кампании B,
+        # и игрокам B в нём писать запрещено.
+        bot = make_bot({CATEGORY_A: [], CATEGORY_B: [make_channel(5, CATEGORY_B, players_can_write=False)]})
         counts = await adopt_manual_channels(bot)
         return counts, await channel_rows(conn), camp_b
 
     counts, rows, camp_b = run(scenario)
     assert counts == (0, 1)
-    assert rows == [(5, camp_b, 1)]  # режим «только ГМ» сохранился
+    assert rows == [(5, camp_b, 1)]  # режим взят из прав относительно новой кампании
+
+
+def test_weekly_updates_gm_only_changed_by_hand():
+    async def scenario(conn):
+        camp = await add_campaign(conn, CATEGORY_A, PLAYER_ROLE_A)
+        await add_campaign_channel(camp, 5, "text", gm_only=False)  # записан как «пишут все»
+        await add_campaign_channel(camp, 6, "text", gm_only=True)   # записан как «только ГМ»
+        bot = make_bot({CATEGORY_A: [
+            make_channel(5, CATEGORY_A, players_can_write=False),  # руками запретили писать
+            make_channel(6, CATEGORY_A, players_can_write=True),   # руками разрешили
+        ]})
+        await adopt_manual_channels(bot)
+        return await channel_rows(conn), camp
+
+    rows, camp = run(scenario)
+    assert rows == [(5, camp, 1), (6, camp, 0)]
+
+
+def test_weekly_keeps_gm_only_when_player_role_is_gone():
+    async def scenario(conn):
+        camp = await add_campaign(conn, CATEGORY_A, PLAYER_ROLE_A)
+        await add_campaign_channel(camp, 5, "text", gm_only=True)
+        bot = make_bot({CATEGORY_A: [make_channel(5, CATEGORY_A, player_role_missing=True)]})
+        await adopt_manual_channels(bot)
+        return await channel_rows(conn), camp
+
+    rows, camp = run(scenario)
+    assert rows == [(5, camp, 1)]
 
 
 def test_weekly_leaves_known_channels_alone():

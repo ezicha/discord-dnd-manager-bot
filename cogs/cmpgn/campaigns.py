@@ -14,6 +14,7 @@ from db.campaigns_db import (
     get_all_campaign_channels,
     move_campaign_channel,
     remove_deleted_channel,
+    set_campaign_channel_gm_only,
     wipe_campaign,
 )
 
@@ -181,13 +182,13 @@ def channel_type_of(channel) -> str:
     return "voice" if isinstance(channel, (discord.VoiceChannel, discord.StageChannel)) else "text"
 
 
-def infer_gm_only(channel, player_role_id: int) -> bool:
-    """Угадывает по правам канала, «только ГМ пишет/говорит» ли он: так бот
+def infer_gm_only(channel, player_role_id: int) -> bool | None:
+    """Определяет по правам канала, «только ГМ пишет/говорит» ли он: так бот
     выставляет права в build_access_overwrites — роли игроков запрещено писать
-    (а в голосовом — подключаться)."""
+    (а в голосовом — подключаться). None — если роли игроков нет и понять нельзя."""
     role = channel.guild.get_role(player_role_id)
     if role is None:
-        return False
+        return None
     overwrite = channel.overwrites_for(role)
     return overwrite.send_messages is False or overwrite.connect is False
 
@@ -203,7 +204,7 @@ async def handle_channel_created(channel) -> bool:
 
     adopted = await adopt_campaign_channel(
         campaign["id"], channel.id, channel_type_of(channel),
-        infer_gm_only(channel, campaign["player_role_id"]),
+        bool(infer_gm_only(channel, campaign["player_role_id"])),
     )
     if adopted:
         logger.info("Новый канал %s в кампании «%s» записан в БД", channel.id, campaign["name"])
@@ -213,10 +214,14 @@ async def handle_channel_created(channel) -> bool:
 async def adopt_manual_channels(bot: commands.Bot) -> tuple[int, int]:
     """Еженедельная сверка каналов в категориях активных кампаний с БД:
     - канала нет в БД (создан вручную, пока бот был выключен) — записываем;
-    - канал записан за другой кампанией (его перенесли сюда вручную) — перепривязываем.
+    - канал записан за другой кампанией (его перенесли сюда вручную) — перепривязываем;
+    - режим «только ГМ» в БД приводим к текущим правам канала (их могли
+      поменять руками в Discord).
     Если сервер недоступен или категории нет в памяти — кампанию пропускаем.
     Возвращает (сколько записано, сколько перепривязано)."""
-    known = {row["discord_channel_id"]: row["campaign_id"] for row in await get_all_campaign_channels()}
+    rows = await get_all_campaign_channels()
+    known = {row["discord_channel_id"]: row["campaign_id"] for row in rows}
+    known_gm_only = {row["discord_channel_id"]: bool(row["gm_only"]) for row in rows}
     adopted = moved = 0
 
     for campaign in await get_active_campaigns_with_category():
@@ -228,19 +233,27 @@ async def adopt_manual_channels(bot: commands.Bot) -> tuple[int, int]:
             continue
 
         for channel in category.channels:
+            gm_only = infer_gm_only(channel, campaign["player_role_id"])
             owner_id = known.get(channel.id)
             if owner_id is None:
-                await adopt_campaign_channel(
-                    campaign["id"], channel.id, channel_type_of(channel),
-                    infer_gm_only(channel, campaign["player_role_id"]),
-                )
+                await adopt_campaign_channel(campaign["id"], channel.id, channel_type_of(channel), bool(gm_only))
                 logger.info("Канал %s, созданный вручную, записан в кампанию «%s»", channel.id, campaign["name"])
                 adopted += 1
-            elif owner_id != campaign["id"]:
+                known[channel.id] = campaign["id"]
+                continue
+
+            if owner_id != campaign["id"]:
                 await move_campaign_channel(channel.id, campaign["id"])
                 logger.info("Канал %s перенесён вручную — перепривязан к кампании «%s»", channel.id, campaign["name"])
                 moved += 1
-            known[channel.id] = campaign["id"]
+                known[channel.id] = campaign["id"]
+
+            if gm_only is not None and gm_only != known_gm_only.get(channel.id):
+                await set_campaign_channel_gm_only(channel.id, gm_only)
+                logger.info(
+                    "Канал %s: режим «только ГМ» в БД обновлён по правам в Discord → %s",
+                    channel.id, "да" if gm_only else "нет",
+                )
 
     return adopted, moved
 
