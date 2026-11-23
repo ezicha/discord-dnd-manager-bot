@@ -6,4 +6,5 @@ __pycache__/
 deploy_listener.txt
 deploysh.txt
 run_local.bat
-data/event_announcements.json.pytest_cache/
+data/event_announcements.json
+.pytest_cache/
