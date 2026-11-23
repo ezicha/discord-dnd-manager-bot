@@ -8,10 +8,41 @@ import calendar as calendar_module
 import logging
 from datetime import date, datetime, timedelta, timezone
 from db.campaigns_db import get_campaign_id_by_category
+from db.events_db import delete_event_record, get_event_record
 
 import discord
 
 logger = logging.getLogger("argus")
+
+
+async def remove_event_announcement_and_record(guild: discord.Guild, event_id: int) -> bool:
+    """
+    Убирает «хвосты» отменённого события: сообщение-анонс в канале и запись в БД.
+    Само событие в Discord к этому моменту уже должно быть удалено.
+
+    Используется и /event cancel, и обработчиком ручного удаления события
+    в Discord. Безопасно вызывать повторно: если анонса или записи уже нет —
+    просто ничего не делает. Возвращает True, если запись в БД была.
+    """
+    record = await get_event_record(event_id)
+    if record is None:
+        return False
+
+    channel_id = record["announcement_channel_id"]
+    message_id = record["announcement_message_id"]
+    if channel_id and message_id:
+        channel = guild.get_channel(channel_id)
+        if channel is not None:
+            try:
+                message = await channel.fetch_message(message_id)
+                await message.delete()
+            except (discord.NotFound, discord.Forbidden):
+                pass  # анонс уже удалён руками или нет прав — не страшно
+            except discord.HTTPException as e:
+                logger.warning("Не удалось удалить анонс события %s: %r", event_id, e)
+
+    await delete_event_record(event_id)
+    return True
 
 # Фиксированный часовой пояс сервера для ввода времени событий: NSK, UTC+7, без перехода на летнее.
 SERVER_TZ = timezone(timedelta(hours=7), name="NSK")

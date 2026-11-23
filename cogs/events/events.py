@@ -13,6 +13,7 @@ from .event_common import (
     get_campaign_for_channel,
     get_campaign_id_for_channel,
     logger,
+    remove_event_announcement_and_record,
     user_role_in_campaign,
 )
 from .event_create import EventCreateView
@@ -210,6 +211,24 @@ async def cleanup_event_records(bot: commands.Bot) -> int:
     return removed
 
 
+async def handle_scheduled_event_deleted(event: discord.ScheduledEvent) -> bool:
+    """
+    Discord сообщил, что событие удалено (вручную в интерфейсе Discord или
+    через /event cancel). Убираем анонс и запись в БД — так же, как /event cancel.
+    Если запись уже убрана (например, это сам /event cancel) — ничего не делаем.
+
+    Завершённые (сыгранные) события не трогаем: их анонсы остаются как история.
+    Возвращает True, если что-то было убрано.
+    """
+    if event.status == discord.EventStatus.completed:
+        return False
+
+    removed = await remove_event_announcement_and_record(event.guild, event.id)
+    if removed:
+        logger.info("Событие %s удалено в Discord — анонс и запись убраны", event.id)
+    return removed
+
+
 class EventsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -218,6 +237,13 @@ class EventsCog(commands.Cog):
 
     def cog_unload(self) -> None:
         self.cleanup_stale_event_records.cancel()
+
+    @commands.Cog.listener()
+    async def on_scheduled_event_delete(self, event: discord.ScheduledEvent) -> None:
+        try:
+            await handle_scheduled_event_deleted(event)
+        except Exception:
+            logger.exception("Ошибка при обработке удаления события %s", event.id)
 
     @tasks.loop(hours=24 * 7)
     async def cleanup_stale_event_records(self) -> None:

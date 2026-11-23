@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import discord
 
-from db.events_db import delete_event_record, get_event_record
-from .event_common import SERVER_TZ, can_manage_event
+from db.events_db import get_event_record
+from .event_common import SERVER_TZ, can_manage_event, remove_event_announcement_and_record
 
 
 class EventCancelSelect(discord.ui.Select):
@@ -59,16 +59,7 @@ class ConfirmCancelButton(discord.ui.Button):
             await interaction.response.send_message(f"Discord отклонил запрос: {e}", ephemeral=True)
             return
 
-        record = await get_event_record(event.id)
-        if record and record["announcement_channel_id"] and record["announcement_message_id"]:
-            channel = interaction.guild.get_channel(record["announcement_channel_id"])
-            if channel is not None:
-                try:
-                    message = await channel.fetch_message(record["announcement_message_id"])
-                    await message.delete()
-                except (discord.NotFound, discord.Forbidden):
-                    pass
-        await delete_event_record(event.id)
+        await remove_event_announcement_and_record(interaction.guild, event.id)
 
         await interaction.response.edit_message(content=f"Событие «{event.name}» отменено.", view=None)
 
