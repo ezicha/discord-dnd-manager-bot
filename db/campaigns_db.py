@@ -288,10 +288,20 @@ async def set_campaign_channel_gm_only(discord_channel_id: int, gm_only: bool) -
 async def get_all_campaign_channels():
     """Возвращает все строки campaign_channels, независимо от статуса —
     используется периодической самоочисткой, которая сверяет их с реальным
-    состоянием Discord (bot.get_channel).
+    состоянием Discord.
+
+    К каждой строке добавлен guild_id сервера, которому принадлежит кампания:
+    самоочистке нужно знать, доступен ли этот сервер прямо сейчас. Если сама
+    кампания в БД не найдена, guild_id будет None.
     """
     db = await get_connection()
-    cursor = await db.execute("SELECT * FROM campaign_channels")
+    cursor = await db.execute(
+        """
+        SELECT cc.*, c.guild_id AS guild_id
+        FROM campaign_channels AS cc
+        LEFT JOIN campaigns AS c ON c.id = cc.campaign_id
+        """
+    )
     return await cursor.fetchall()
 
 

@@ -120,6 +120,56 @@ class CampaignGroup(discord.app_commands.Group):
                 await interaction.response.send_message(f"Что-то пошло не так. Ошибка: {e}", ephemeral=True)
 
 
+async def channel_is_really_deleted(bot: commands.Bot, guild_id: int | None, channel_id: int) -> bool:
+    """
+    True — только если мы ТОЧНО знаем, что канала больше нет в Discord.
+    При любой неясности (сервер недоступен, сбой сети, нет прав) — False:
+    лучше оставить лишнюю запись в БД, чем стереть живую кампанию.
+    """
+    if guild_id is None:
+        logger.warning("Очистка campaign_channels: у канала %s нет кампании в БД — пропускаю", channel_id)
+        return False
+
+    guild = bot.get_guild(guild_id)
+    if guild is None or guild.unavailable:
+        # Сервер не загружен в память бота или Discord отдал его как
+        # «временно недоступен» — его каналы в памяти пустые, верить им нельзя.
+        logger.warning("Очистка campaign_channels: сервер %s недоступен — пропускаю канал %s", guild_id, channel_id)
+        return False
+
+    if guild.get_channel(channel_id) is not None:
+        return False  # канал на месте
+
+    # В памяти канала нет — переспрашиваем Discord напрямую.
+    try:
+        await bot.fetch_channel(channel_id)
+    except discord.NotFound:
+        return True  # Discord подтвердил: канала нет
+    except discord.HTTPException as e:
+        logger.warning("Очистка campaign_channels: не удалось проверить канал %s (%r) — пропускаю", channel_id, e)
+        return False
+    return False  # Discord канал нашёл — просто в памяти его не было
+
+
+async def cleanup_campaign_channels(bot: commands.Bot) -> int:
+    """Удаляет из БД записи о каналах, которые удалили в Discord мимо бота.
+    Возвращает, сколько записей удалено."""
+    rows = await get_all_campaign_channels()
+    removed = 0
+    for row in rows:
+        channel_id = row["discord_channel_id"]
+        if await channel_is_really_deleted(bot, row["guild_id"], channel_id):
+            # Канал удалили в Discord мимо бота (не через /campaign archive
+            # и не через /dev wipe_archive) — remove_deleted_channel сам решит,
+            # надо ли заодно снести и саму кампанию, если каналов не осталось.
+            await remove_deleted_channel(channel_id, bot.user.id)
+            removed += 1
+
+    if removed:
+        logger.info("Очистка campaign_channels: удалено %d устаревших записей", removed)
+    return removed
+
+
 class Campaigns(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -133,21 +183,10 @@ class Campaigns(commands.Cog):
 
     @tasks.loop(hours=24 * 7)
     async def cleanup_stale_campaign_channels(self) -> None:
-        rows = await get_all_campaign_channels()
-        if not rows:
-            return
-
-        removed = 0
-        for row in rows:
-            if self.bot.get_channel(row["discord_channel_id"]) is None:
-                # Канал удалили в Discord мимо бота (не через /campaign archive
-                # и не через /dev wipe_archive) — remove_deleted_channel сам решит,
-                # надо ли заодно снести и саму кампанию, если каналов не осталось.
-                await remove_deleted_channel(row["discord_channel_id"], self.bot.user.id)
-                removed += 1
-
-        if removed:
-            logger.info("Очистка campaign_channels: удалено %d устаревших записей", removed)
+        try:
+            await cleanup_campaign_channels(self.bot)
+        except Exception:
+            logger.exception("Очистка campaign_channels: непредвиденная ошибка")
 
     @cleanup_stale_campaign_channels.before_loop
     async def before_cleanup(self) -> None:
