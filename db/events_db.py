@@ -70,12 +70,21 @@ async def delete_event_record(scheduled_event_id: int) -> None:
     await db.commit()
 
 
-async def get_all_scheduled_event_ids() -> list[int]:
-    """Все scheduled_event_id, которые сейчас есть в БД — нужно периодической
-    задаче автоочистки, чтобы сверить со списком реальных guild.scheduled_events
-    и найти "мёртвые" записи (события, отменённые не через /event cancel).
+async def get_all_event_records() -> list[dict]:
+    """Все записи событий из БД вместе с guild_id сервера их кампании — нужно
+    периодической задаче автоочистки, чтобы сверить их с реальными событиями
+    в Discord и найти "мёртвые" записи (события, отменённые не через /event cancel).
+
+    Каждый элемент: {"scheduled_event_id": ..., "guild_id": ...}.
+    Если кампания события в БД не найдена, guild_id будет None.
     """
     db = await get_connection()
-    cursor = await db.execute("SELECT scheduled_event_id FROM event_announcements")
+    cursor = await db.execute(
+        """
+        SELECT ea.scheduled_event_id, c.guild_id AS guild_id
+        FROM event_announcements AS ea
+        LEFT JOIN campaigns AS c ON c.id = ea.campaign_id
+        """
+    )
     rows = await cursor.fetchall()
-    return [row["scheduled_event_id"] for row in rows]
+    return [dict(row) for row in rows]
