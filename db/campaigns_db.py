@@ -385,14 +385,15 @@ async def get_all_campaign_channels():
     используется периодической самоочисткой, которая сверяет их с реальным
     состоянием Discord.
 
-    К каждой строке добавлен guild_id сервера, которому принадлежит кампания:
-    самоочистке нужно знать, доступен ли этот сервер прямо сейчас. Если сама
-    кампания в БД не найдена, guild_id будет None.
+    К каждой строке добавлены guild_id сервера, которому принадлежит кампания
+    (самоочистке нужно знать, доступен ли этот сервер прямо сейчас), и
+    campaign_name — для понятных сообщений в логах. Если сама кампания в БД
+    не найдена, оба будут None.
     """
     db = await get_connection()
     cursor = await db.execute(
         """
-        SELECT cc.*, c.guild_id AS guild_id
+        SELECT cc.*, c.guild_id AS guild_id, c.name AS campaign_name
         FROM campaign_channels AS cc
         LEFT JOIN campaigns AS c ON c.id = cc.campaign_id
         """

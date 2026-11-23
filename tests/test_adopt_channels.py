@@ -29,7 +29,7 @@ def make_channel(channel_id, category_id, *, players_can_write=True, player_role
         else discord.PermissionOverwrite(view_channel=True, send_messages=False)
     )
     return SimpleNamespace(
-        id=channel_id, category_id=category_id, guild=guild,
+        id=channel_id, name=f"канал-{channel_id}", category_id=category_id, guild=guild,
         overwrites_for=lambda role: overwrite,
     )
 

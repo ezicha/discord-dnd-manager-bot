@@ -37,7 +37,7 @@ def make_guild(*, message_missing=False, channel_missing=False):
 
 
 def make_event(guild, status=discord.EventStatus.scheduled):
-    return SimpleNamespace(id=EVENT_ID, guild=guild, status=status)
+    return SimpleNamespace(id=EVENT_ID, name="Сессия 1", guild=guild, status=status)
 
 
 def run_scenario(event, *, with_record=True, with_announcement=True, times=1):

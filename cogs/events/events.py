@@ -164,21 +164,24 @@ class EventGroup(app_commands.Group):
 FINISHED_EVENT_STATUSES = (discord.EventStatus.completed, discord.EventStatus.canceled)
 
 
-async def event_is_really_gone(bot: commands.Bot, guild_id: int | None, event_id: int) -> bool:
+async def event_is_really_gone(bot: commands.Bot, guild_id: int | None, event_id: int, what: str) -> bool:
     """
     True — только если мы ТОЧНО знаем, что события больше нет (удалено,
     отменено или уже завершилось). При любой неясности — False: лучше
     оставить лишнюю запись в БД, чем стереть живое событие.
+
+    what — человекопонятное описание для логов, например
+    "событие (id 123) кампании «Лекторий»".
     """
     if guild_id is None:
-        logger.warning("Очистка event_announcements: у события %s нет кампании в БД — пропускаю", event_id)
+        logger.warning("Автоочистка событий: %s — кампания не найдена в БД, пропускаю", what)
         return False
 
     guild = bot.get_guild(guild_id)
     if guild is None or guild.unavailable:
         # Сервер не загружен или «временно недоступен» — его события
         # в памяти бота пустые, верить им нельзя.
-        logger.warning("Очистка event_announcements: сервер %s недоступен — пропускаю событие %s", guild_id, event_id)
+        logger.warning("Автоочистка событий: сервер (id %s) недоступен — пропускаю %s", guild_id, what)
         return False
 
     if guild.get_scheduled_event(event_id) is not None:
@@ -190,7 +193,7 @@ async def event_is_really_gone(bot: commands.Bot, guild_id: int | None, event_id
     except discord.NotFound:
         return True  # Discord подтвердил: события нет
     except discord.HTTPException as e:
-        logger.warning("Очистка event_announcements: не удалось проверить событие %s (%r) — пропускаю", event_id, e)
+        logger.warning("Автоочистка событий: не удалось проверить %s (%r) — пропускаю", what, e)
         return False
     return event.status in FINISHED_EVENT_STATUSES
 
@@ -202,12 +205,13 @@ async def cleanup_event_records(bot: commands.Bot) -> int:
     removed = 0
     for rec in records:
         event_id = rec["scheduled_event_id"]
-        if await event_is_really_gone(bot, rec["guild_id"], event_id):
+        # Название удалённого события уже не узнать — только id и кампания.
+        what = f"событие (id {event_id}) кампании «{rec['campaign_name'] or '?'}»"
+        if await event_is_really_gone(bot, rec["guild_id"], event_id, what):
             await delete_event_record(event_id)
+            logger.info("Прошло или удалено в Discord %s — запись убрана из БД", what)
             removed += 1
 
-    if removed:
-        logger.info("Очистка event_announcements: удалено %d устаревших записей", removed)
     return removed
 
 
@@ -225,7 +229,7 @@ async def handle_scheduled_event_deleted(event: discord.ScheduledEvent) -> bool:
 
     removed = await remove_event_announcement_and_record(event.guild, event.id)
     if removed:
-        logger.info("Событие %s удалено в Discord — анонс и запись убраны", event.id)
+        logger.info("Событие «%s» (id %s) удалено в Discord — анонс и запись убраны", event.name, event.id)
     return removed
 
 

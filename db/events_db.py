@@ -75,13 +75,13 @@ async def get_all_event_records() -> list[dict]:
     периодической задаче автоочистки, чтобы сверить их с реальными событиями
     в Discord и найти "мёртвые" записи (события, отменённые не через /event cancel).
 
-    Каждый элемент: {"scheduled_event_id": ..., "guild_id": ...}.
-    Если кампания события в БД не найдена, guild_id будет None.
+    Каждый элемент: {"scheduled_event_id": ..., "guild_id": ..., "campaign_name": ...}.
+    Если кампания события в БД не найдена, guild_id и campaign_name будут None.
     """
     db = await get_connection()
     cursor = await db.execute(
         """
-        SELECT ea.scheduled_event_id, c.guild_id AS guild_id
+        SELECT ea.scheduled_event_id, c.guild_id AS guild_id, c.name AS campaign_name
         FROM event_announcements AS ea
         LEFT JOIN campaigns AS c ON c.id = ea.campaign_id
         """

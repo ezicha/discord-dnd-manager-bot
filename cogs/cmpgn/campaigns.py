@@ -129,22 +129,30 @@ class CampaignGroup(discord.app_commands.Group):
                 await interaction.response.send_message(f"Что-то пошло не так. Ошибка: {e}", ephemeral=True)
 
 
-async def channel_is_really_deleted(bot: commands.Bot, guild_id: int | None, channel_id: int) -> bool:
+def describe_channel(channel) -> str:
+    """«название» (id …) — чтобы в логах было понятно человеку, а по id можно было найти точно."""
+    return f"«{channel.name}» (id {channel.id})"
+
+
+async def channel_is_really_deleted(bot: commands.Bot, guild_id: int | None, channel_id: int, what: str) -> bool:
     """
     True — только если мы ТОЧНО знаем, что канала (или категории — для Discord
     это тоже канал) больше нет. При любой неясности (сервер недоступен, сбой
     сети, нет прав) — False: лучше оставить лишнюю запись в БД, чем стереть
     живую кампанию.
+
+    what — человекопонятное описание для логов, например
+    "канал id 123 кампании «Лекторий»".
     """
     if guild_id is None:
-        logger.warning("Автоочистка кампаний: у канала %s нет кампании в БД — пропускаю", channel_id)
+        logger.warning("Автоочистка кампаний: %s — кампания не найдена в БД, пропускаю", what)
         return False
 
     guild = bot.get_guild(guild_id)
     if guild is None or guild.unavailable:
         # Сервер не загружен в память бота или Discord отдал его как
         # «временно недоступен» — его каналы в памяти пустые, верить им нельзя.
-        logger.warning("Автоочистка кампаний: сервер %s недоступен — пропускаю канал %s", guild_id, channel_id)
+        logger.warning("Автоочистка кампаний: сервер (id %s) недоступен — пропускаю %s", guild_id, what)
         return False
 
     if guild.get_channel(channel_id) is not None:
@@ -156,7 +164,7 @@ async def channel_is_really_deleted(bot: commands.Bot, guild_id: int | None, cha
     except discord.NotFound:
         return True  # Discord подтвердил: канала нет
     except discord.HTTPException as e:
-        logger.warning("Автоочистка кампаний: не удалось проверить канал %s (%r) — пропускаю", channel_id, e)
+        logger.warning("Автоочистка кампаний: не удалось проверить %s (%r) — пропускаю", what, e)
         return False
     return False  # Discord канал нашёл — просто в памяти его не было
 
@@ -167,11 +175,13 @@ async def cleanup_deleted_categories(bot: commands.Bot) -> int:
     Возвращает, сколько кампаний стёрто."""
     wiped = 0
     for campaign in await get_active_campaigns_with_category():
-        if await channel_is_really_deleted(bot, campaign["guild_id"], campaign["category_id"]):
+        what = f"категорию кампании «{campaign['name']}»"
+        if await channel_is_really_deleted(bot, campaign["guild_id"], campaign["category_id"], what):
             await wipe_campaign(campaign["id"], bot.user.id)
             logger.info(
-                "Автоочистка кампаний: категория кампании «%s» (id=%s) удалена в Discord — кампания стёрта из БД",
-                campaign["name"], campaign["id"],
+                "Категория кампании «%s» удалена в Discord — кампания стёрта из БД "
+                "(каналы, роли и события в Discord не тронуты)",
+                campaign["name"],
             )
             wiped += 1
     return wiped
@@ -207,7 +217,7 @@ async def handle_channel_created(channel) -> bool:
         bool(infer_gm_only(channel, campaign["player_role_id"])),
     )
     if adopted:
-        logger.info("Новый канал %s в кампании «%s» записан в БД", channel.id, campaign["name"])
+        logger.info("Новый канал %s в кампании «%s» записан в БД", describe_channel(channel), campaign["name"])
     return adopted
 
 
@@ -222,6 +232,7 @@ async def adopt_manual_channels(bot: commands.Bot) -> tuple[int, int]:
     rows = await get_all_campaign_channels()
     known = {row["discord_channel_id"]: row["campaign_id"] for row in rows}
     known_gm_only = {row["discord_channel_id"]: bool(row["gm_only"]) for row in rows}
+    campaign_names = {row["campaign_id"]: row["campaign_name"] for row in rows}
     adopted = moved = 0
 
     for campaign in await get_active_campaigns_with_category():
@@ -237,22 +248,28 @@ async def adopt_manual_channels(bot: commands.Bot) -> tuple[int, int]:
             owner_id = known.get(channel.id)
             if owner_id is None:
                 await adopt_campaign_channel(campaign["id"], channel.id, channel_type_of(channel), bool(gm_only))
-                logger.info("Канал %s, созданный вручную, записан в кампанию «%s»", channel.id, campaign["name"])
+                logger.info(
+                    "Канал %s, которого не было в БД, записан в кампанию «%s» (режим «только ГМ»: %s)",
+                    describe_channel(channel), campaign["name"], "да" if gm_only else "нет",
+                )
                 adopted += 1
                 known[channel.id] = campaign["id"]
                 continue
 
             if owner_id != campaign["id"]:
                 await move_campaign_channel(channel.id, campaign["id"])
-                logger.info("Канал %s перенесён вручную — перепривязан к кампании «%s»", channel.id, campaign["name"])
+                logger.info(
+                    "Канал %s перенесён вручную из кампании «%s» в «%s» — привязка в БД обновлена",
+                    describe_channel(channel), campaign_names.get(owner_id, "?"), campaign["name"],
+                )
                 moved += 1
                 known[channel.id] = campaign["id"]
 
             if gm_only is not None and gm_only != known_gm_only.get(channel.id):
                 await set_campaign_channel_gm_only(channel.id, gm_only)
                 logger.info(
-                    "Канал %s: режим «только ГМ» в БД обновлён по правам в Discord → %s",
-                    channel.id, "да" if gm_only else "нет",
+                    "Канал %s кампании «%s»: режим «только ГМ» в БД обновлён по правам в Discord → %s",
+                    describe_channel(channel), campaign["name"], "да" if gm_only else "нет",
                 )
 
     return adopted, moved
@@ -265,15 +282,16 @@ async def cleanup_campaign_channels(bot: commands.Bot) -> int:
     removed = 0
     for row in rows:
         channel_id = row["discord_channel_id"]
-        if await channel_is_really_deleted(bot, row["guild_id"], channel_id):
+        # Название удалённого канала уже не узнать — только id и кампания.
+        what = f"канал (id {channel_id}) кампании «{row['campaign_name'] or '?'}»"
+        if await channel_is_really_deleted(bot, row["guild_id"], channel_id, what):
             # Канал удалили в Discord мимо бота (не через /campaign archive
             # и не через /dev wipe_archive) — remove_deleted_channel сам решит,
             # надо ли заодно стереть заархивированную кампанию без каналов.
             await remove_deleted_channel(channel_id, bot.user.id)
+            logger.info("Удалён в Discord %s — запись убрана из БД", what)
             removed += 1
 
-    if removed:
-        logger.info("Очистка campaign_channels: удалено %d устаревших записей", removed)
     return removed
 
 
