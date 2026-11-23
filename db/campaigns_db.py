@@ -232,12 +232,16 @@ async def unarchive_campaign_channel(discord_channel_id: int) -> None:
 async def remove_deleted_channel(discord_channel_id: int, actor_id: int) -> None:
     """Вызывается после того, как канал уже физически удалён в Discord.
 
-    Убирает его из campaign_channels; если после этого у родительской
-    кампании не осталось ни одного канала — удаляет и саму кампанию,
-    предварительно записав 'wiped' в историю.
+    Убирает его из campaign_channels. Если после этого у ЗААРХИВИРОВАННОЙ
+    кампании не осталось ни одного канала — стирает и саму кампанию
+    (с записью 'wiped' в историю).
+
+    Активную кампанию здесь не стираем, даже если известных БД каналов
+    не осталось: в её категории могут быть каналы, созданные вручную.
+    Активная кампания считается удалённой только когда удалена её
+    категория — это решает автоочистка через wipe_campaign.
     """
     db = await get_connection()
-    now = datetime.now(timezone.utc).isoformat()
 
     cursor = await db.execute(
         "SELECT campaign_id FROM campaign_channels WHERE discord_channel_id = ?",
@@ -261,16 +265,52 @@ async def remove_deleted_channel(discord_channel_id: int, actor_id: int) -> None
     remaining = (await cursor.fetchone())["cnt"]
 
     if remaining == 0:
-        await db.execute(
-            """
-            INSERT INTO campaign_history (campaign_id, action, actor_id, created_at)
-            VALUES (?, 'wiped', ?, ?)
-            """,
-            (campaign_id, actor_id, now),
-        )
-        await db.execute("DELETE FROM campaigns WHERE id = ?", (campaign_id,))
+        cursor = await db.execute("SELECT status FROM campaigns WHERE id = ?", (campaign_id,))
+        campaign = await cursor.fetchone()
+        if campaign is not None and campaign["status"] == "archived":
+            await _wipe_campaign_rows(db, campaign_id, actor_id)
 
     await db.commit()
+
+
+async def _wipe_campaign_rows(db, campaign_id: int, actor_id: int) -> None:
+    """Стирает кампанию и всё, что на неё ссылается (каналы, записи событий),
+    записав 'wiped' в историю. Без commit — его делает вызывающая функция.
+    Сама история кампании (campaign_history) остаётся.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        """
+        INSERT INTO campaign_history (campaign_id, action, actor_id, created_at)
+        VALUES (?, 'wiped', ?, ?)
+        """,
+        (campaign_id, actor_id, now),
+    )
+    await db.execute("DELETE FROM event_announcements WHERE campaign_id = ?", (campaign_id,))
+    await db.execute("DELETE FROM campaign_channels WHERE campaign_id = ?", (campaign_id,))
+    await db.execute("DELETE FROM campaigns WHERE id = ?", (campaign_id,))
+
+
+async def wipe_campaign(campaign_id: int, actor_id: int) -> None:
+    """Стирает кампанию из БД — для автоочистки, когда категорию активной
+    кампании удалили в Discord мимо бота. В самом Discord ничего не трогает."""
+    db = await get_connection()
+    await _wipe_campaign_rows(db, campaign_id, actor_id)
+    await db.commit()
+
+
+async def get_active_campaigns_with_category() -> list[dict]:
+    """Все активные кампании с привязанной категорией — для автоочистки,
+    которая проверяет, не удалили ли категорию в Discord."""
+    db = await get_connection()
+    cursor = await db.execute(
+        """
+        SELECT id, guild_id, name, category_id
+        FROM campaigns
+        WHERE status = 'active' AND category_id IS NOT NULL
+        """
+    )
+    return [dict(r) for r in await cursor.fetchall()]
 
 
 async def set_campaign_channel_gm_only(discord_channel_id: int, gm_only: bool) -> None:

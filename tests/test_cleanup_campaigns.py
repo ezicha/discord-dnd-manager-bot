@@ -11,10 +11,11 @@ from types import SimpleNamespace
 import discord
 
 from conftest import close_test_db, http_error, open_test_db
-from cogs.cmpgn.campaigns import cleanup_campaign_channels
+from cogs.cmpgn.campaigns import cleanup_campaign_channels, cleanup_deleted_categories
 
 GUILD_ID = 100
 CHANNEL_ID = 555
+CATEGORY_ID = 900
 
 
 # --- Поддельные объекты Discord ---
@@ -46,15 +47,22 @@ def make_bot(guild, fetch_result):
 
 # --- Подготовка БД: одна кампания с одним каналом ---
 
-async def add_campaign_with_channel(conn, guild_id=GUILD_ID):
+async def add_campaign_with_channel(conn, *, status="active"):
+    """Активная кампания — с категорией; заархивированная — без (как в боте)."""
     cur = await conn.execute(
-        "INSERT INTO campaigns (guild_id, name, gm_role_id, player_role_id, created_at) "
-        "VALUES (?, 'Тест', 1, 2, '2026-01-01')",
-        (guild_id,),
+        "INSERT INTO campaigns (guild_id, name, gm_role_id, player_role_id, category_id, status, created_at) "
+        "VALUES (?, 'Тест', 1, 2, ?, ?, '2026-01-01')",
+        (GUILD_ID, CATEGORY_ID if status == "active" else None, status),
+    )
+    campaign_id = cur.lastrowid
+    await conn.execute(
+        "INSERT INTO campaign_channels (campaign_id, discord_channel_id, channel_type, status) "
+        "VALUES (?, ?, 'text', ?)",
+        (campaign_id, CHANNEL_ID, status),
     )
     await conn.execute(
-        "INSERT INTO campaign_channels (campaign_id, discord_channel_id, channel_type) VALUES (?, ?, 'text')",
-        (cur.lastrowid, CHANNEL_ID),
+        "INSERT INTO event_announcements (scheduled_event_id, campaign_id, creator_id) VALUES (1, ?, 1)",
+        (campaign_id,),
     )
     await conn.commit()
 
@@ -64,17 +72,17 @@ async def count(conn, table):
     return (await cur.fetchone())[0]
 
 
-def run_scenario(guild, fetch_result, *, delete_campaign_row=False):
+def run_scenario(guild, fetch_result, *, delete_campaign_row=False, status="active", cleanup=cleanup_campaign_channels):
     """Готовит БД, запускает очистку, возвращает (удалено, каналов, кампаний, вызовы fetch)."""
     async def scenario():
         conn = await open_test_db()
         try:
-            await add_campaign_with_channel(conn)
+            await add_campaign_with_channel(conn, status=status)
             if delete_campaign_row:
                 await conn.execute("DELETE FROM campaigns")
                 await conn.commit()
             bot, calls = make_bot(guild, fetch_result)
-            removed = await cleanup_campaign_channels(bot)
+            removed = await cleanup(bot)
             return removed, await count(conn, "campaign_channels"), await count(conn, "campaigns"), calls
         finally:
             await close_test_db()
@@ -106,10 +114,75 @@ def test_unknown_guild_deletes_nothing():
     assert (removed, channels, campaigns) == (0, 1, 1)
 
 
-def test_confirmed_not_found_removes_channel_and_empty_campaign():
+def test_confirmed_not_found_removes_channel_but_keeps_active_campaign():
+    # У активной кампании могут быть каналы, созданные вручную, — её не стираем.
     removed, channels, campaigns, calls = run_scenario(make_guild(), http_error(discord.NotFound, 404))
-    assert (removed, channels, campaigns) == (1, 0, 0)
+    assert (removed, channels, campaigns) == (1, 0, 1)
     assert calls == [CHANNEL_ID]
+
+
+def test_last_channel_of_archived_campaign_wipes_campaign():
+    removed, channels, campaigns, _ = run_scenario(
+        make_guild(), http_error(discord.NotFound, 404), status="archived"
+    )
+    assert (removed, channels, campaigns) == (1, 0, 0)
+
+
+# --- Удалённая категория активной кампании ---
+
+def run_category_scenario(guild, fetch_result, **kwargs):
+    return run_scenario(guild, fetch_result, cleanup=cleanup_deleted_categories, **kwargs)
+
+
+def test_deleted_category_wipes_campaign_with_channels_and_events():
+    async def scenario():
+        conn = await open_test_db()
+        try:
+            await add_campaign_with_channel(conn)
+            bot, calls = make_bot(make_guild(), http_error(discord.NotFound, 404))
+            wiped = await cleanup_deleted_categories(bot)
+            cur = await conn.execute("SELECT action FROM campaign_history")
+            history = [r[0] for r in await cur.fetchall()]
+            return (wiped, await count(conn, "campaigns"), await count(conn, "campaign_channels"),
+                    await count(conn, "event_announcements"), history, calls)
+        finally:
+            await close_test_db()
+
+    wiped, campaigns, channels, events, history, calls = asyncio.run(scenario())
+    assert (wiped, campaigns, channels, events) == (1, 0, 0, 0)
+    assert history == ["wiped"]
+    assert calls == [CATEGORY_ID]
+
+
+def test_category_in_cache_keeps_campaign():
+    wiped, channels, campaigns, calls = run_category_scenario(
+        make_guild(cached_channels={CATEGORY_ID}), http_error(discord.NotFound, 404)
+    )
+    assert (wiped, channels, campaigns) == (0, 1, 1)
+    assert calls == []
+
+
+def test_category_check_with_unavailable_guild_keeps_campaign():
+    wiped, channels, campaigns, calls = run_category_scenario(
+        make_guild(unavailable=True), http_error(discord.NotFound, 404)
+    )
+    assert (wiped, channels, campaigns) == (0, 1, 1)
+    assert calls == []
+
+
+def test_category_check_with_discord_outage_keeps_campaign():
+    wiped, channels, campaigns, _ = run_category_scenario(
+        make_guild(), http_error(discord.DiscordServerError, 503)
+    )
+    assert (wiped, channels, campaigns) == (0, 1, 1)
+
+
+def test_archived_campaign_is_not_checked_by_category():
+    wiped, channels, campaigns, calls = run_category_scenario(
+        make_guild(), http_error(discord.NotFound, 404), status="archived"
+    )
+    assert (wiped, channels, campaigns) == (0, 1, 1)
+    assert calls == []
 
 
 def test_forbidden_keeps_data():
