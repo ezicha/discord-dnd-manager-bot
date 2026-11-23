@@ -191,17 +191,72 @@ discord_channel_id: int,
 channel_type: str,
 gm_only: bool = False,
 ) -> None:
-    """Добавляет новый канал к существующей кампании (status = 'active')."""
+    """Добавляет новый канал к существующей кампании (status = 'active').
+
+    Вызывается командами бота (/campaign create, /campaign edit). Канал к этому
+    моменту уже мог быть записан обработчиком «создан канал» (adopt_campaign_channel) —
+    тогда новую строку не добавляем, а только выставляем gm_only, выбранный
+    в команде: он точнее, чем угаданный по правам канала.
+    """
+    db = await get_connection()
+    await _insert_channel_if_missing(db, campaign_id, discord_channel_id, channel_type, gm_only)
+    await db.execute(
+        "UPDATE campaign_channels SET gm_only = ? WHERE discord_channel_id = ?",
+        (int(gm_only), discord_channel_id),
+    )
+    await db.commit()
+
+
+async def _insert_channel_if_missing(db, campaign_id, discord_channel_id, channel_type, gm_only) -> bool:
+    """Одним запросом: вставить строку канала, только если такого канала ещё нет.
+    Одним — чтобы два одновременных вызова не создали дубль. True — если вставили."""
+    cursor = await db.execute(
+        """
+        INSERT INTO campaign_channels (campaign_id, discord_channel_id, channel_type, status, gm_only)
+        SELECT ?, ?, ?, 'active', ?
+        WHERE NOT EXISTS (SELECT 1 FROM campaign_channels WHERE discord_channel_id = ?)
+        """,
+        (campaign_id, discord_channel_id, channel_type, int(gm_only), discord_channel_id),
+    )
+    return cursor.rowcount > 0
+
+
+async def adopt_campaign_channel(
+    campaign_id: int,
+    discord_channel_id: int,
+    channel_type: str,
+    gm_only: bool,
+) -> bool:
+    """Записывает в БД канал, созданный в категории кампании вручную (мимо бота).
+    Если канал уже известен — ничего не делает. True — если канал добавлен."""
+    db = await get_connection()
+    inserted = await _insert_channel_if_missing(db, campaign_id, discord_channel_id, channel_type, gm_only)
+    await db.commit()
+    return inserted
+
+
+async def move_campaign_channel(discord_channel_id: int, new_campaign_id: int) -> None:
+    """Перепривязывает канал к другой кампании — когда его вручную перенесли
+    в категорию другой активной кампании."""
     db = await get_connection()
     await db.execute(
-         """
-        INSERT INTO campaign_channels (campaign_id, discord_channel_id, channel_type, status, gm_only)
-        VALUES (?, ?, ?, 'active', ?)
-        """,
-    (campaign_id, discord_channel_id, channel_type, int(gm_only)),
+        "UPDATE campaign_channels SET campaign_id = ?, status = 'active' WHERE discord_channel_id = ?",
+        (new_campaign_id, discord_channel_id),
     )
-
     await db.commit()
+
+
+async def get_active_campaign_by_category(category_id: int) -> dict | None:
+    """Активная кампания по id её категории (с player_role_id — он нужен,
+    чтобы понять по правам канала, «только ГМ» ли он). None — если нет."""
+    db = await get_connection()
+    cursor = await db.execute(
+        "SELECT id, guild_id, name, category_id, player_role_id FROM campaigns "
+        "WHERE category_id = ? AND status = 'active'",
+        (category_id,),
+    )
+    row = await cursor.fetchone()
+    return dict(row) if row else None
 
 
 async def archive_campaign_channel(discord_channel_id: int) -> None:
@@ -305,7 +360,7 @@ async def get_active_campaigns_with_category() -> list[dict]:
     db = await get_connection()
     cursor = await db.execute(
         """
-        SELECT id, guild_id, name, category_id
+        SELECT id, guild_id, name, category_id, player_role_id
         FROM campaigns
         WHERE status = 'active' AND category_id IS NOT NULL
         """

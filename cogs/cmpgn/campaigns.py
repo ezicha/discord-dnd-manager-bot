@@ -8,8 +8,11 @@ from .campaign_edit import CampaignEditMenuView, CampaignEditSelectView
 from .campaign_resurrect import MAX_CHANNELS_FOR_RENAME, ResurrectChannelPickView, ResurrectModal, ResurrectSelectView
 
 from db.campaigns_db import (
+    adopt_campaign_channel,
+    get_active_campaign_by_category,
     get_active_campaigns_with_category,
     get_all_campaign_channels,
+    move_campaign_channel,
     remove_deleted_channel,
     wipe_campaign,
 )
@@ -173,6 +176,75 @@ async def cleanup_deleted_categories(bot: commands.Bot) -> int:
     return wiped
 
 
+def channel_type_of(channel) -> str:
+    """Тип канала в том виде, в каком он хранится в БД."""
+    return "voice" if isinstance(channel, (discord.VoiceChannel, discord.StageChannel)) else "text"
+
+
+def infer_gm_only(channel, player_role_id: int) -> bool:
+    """Угадывает по правам канала, «только ГМ пишет/говорит» ли он: так бот
+    выставляет права в build_access_overwrites — роли игроков запрещено писать
+    (а в голосовом — подключаться)."""
+    role = channel.guild.get_role(player_role_id)
+    if role is None:
+        return False
+    overwrite = channel.overwrites_for(role)
+    return overwrite.send_messages is False or overwrite.connect is False
+
+
+async def handle_channel_created(channel) -> bool:
+    """Discord сообщил о новом канале. Если он в категории активной кампании —
+    записываем его в БД (если его там ещё нет). True — если записали."""
+    if isinstance(channel, discord.CategoryChannel) or channel.category_id is None:
+        return False
+    campaign = await get_active_campaign_by_category(channel.category_id)
+    if campaign is None:
+        return False
+
+    adopted = await adopt_campaign_channel(
+        campaign["id"], channel.id, channel_type_of(channel),
+        infer_gm_only(channel, campaign["player_role_id"]),
+    )
+    if adopted:
+        logger.info("Новый канал %s в кампании «%s» записан в БД", channel.id, campaign["name"])
+    return adopted
+
+
+async def adopt_manual_channels(bot: commands.Bot) -> tuple[int, int]:
+    """Еженедельная сверка каналов в категориях активных кампаний с БД:
+    - канала нет в БД (создан вручную, пока бот был выключен) — записываем;
+    - канал записан за другой кампанией (его перенесли сюда вручную) — перепривязываем.
+    Если сервер недоступен или категории нет в памяти — кампанию пропускаем.
+    Возвращает (сколько записано, сколько перепривязано)."""
+    known = {row["discord_channel_id"]: row["campaign_id"] for row in await get_all_campaign_channels()}
+    adopted = moved = 0
+
+    for campaign in await get_active_campaigns_with_category():
+        guild = bot.get_guild(campaign["guild_id"])
+        if guild is None or guild.unavailable:
+            continue
+        category = guild.get_channel(campaign["category_id"])
+        if category is None:
+            continue
+
+        for channel in category.channels:
+            owner_id = known.get(channel.id)
+            if owner_id is None:
+                await adopt_campaign_channel(
+                    campaign["id"], channel.id, channel_type_of(channel),
+                    infer_gm_only(channel, campaign["player_role_id"]),
+                )
+                logger.info("Канал %s, созданный вручную, записан в кампанию «%s»", channel.id, campaign["name"])
+                adopted += 1
+            elif owner_id != campaign["id"]:
+                await move_campaign_channel(channel.id, campaign["id"])
+                logger.info("Канал %s перенесён вручную — перепривязан к кампании «%s»", channel.id, campaign["name"])
+                moved += 1
+            known[channel.id] = campaign["id"]
+
+    return adopted, moved
+
+
 async def cleanup_campaign_channels(bot: commands.Bot) -> int:
     """Удаляет из БД записи о каналах, которые удалили в Discord мимо бота.
     Возвращает, сколько записей удалено."""
@@ -203,12 +275,21 @@ class Campaigns(commands.Cog):
         self.bot.tree.remove_command(self.campaign_group.name)
         self.cleanup_stale_campaign_channels.cancel()
 
+    @commands.Cog.listener()
+    async def on_guild_channel_create(self, channel: discord.abc.GuildChannel) -> None:
+        try:
+            await handle_channel_created(channel)
+        except Exception:
+            logger.exception("Ошибка при записи нового канала %s в БД", channel.id)
+
     @tasks.loop(hours=24 * 7)
     async def cleanup_stale_campaign_channels(self) -> None:
         try:
-            # Сначала кампании с удалённой категорией (их каналы уйдут вместе
-            # с ними), потом — отдельные удалённые каналы.
+            # 1) кампании с удалённой категорией (их каналы уйдут вместе с ними);
+            # 2) каналы, созданные или перенесённые вручную;
+            # 3) отдельные удалённые каналы.
             await cleanup_deleted_categories(self.bot)
+            await adopt_manual_channels(self.bot)
             await cleanup_campaign_channels(self.bot)
         except Exception:
             logger.exception("Очистка campaign_channels: непредвиденная ошибка")
