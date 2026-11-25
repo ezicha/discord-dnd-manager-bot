@@ -221,19 +221,19 @@ async def handle_channel_created(channel) -> bool:
     return adopted
 
 
-async def adopt_manual_channels(bot: commands.Bot) -> tuple[int, int]:
+async def adopt_manual_channels(bot: commands.Bot) -> tuple[int, int, int]:
     """Еженедельная сверка каналов в категориях активных кампаний с БД:
     - канала нет в БД (создан вручную, пока бот был выключен) — записываем;
     - канал записан за другой кампанией (его перенесли сюда вручную) — перепривязываем;
     - режим «только ГМ» в БД приводим к текущим правам канала (их могли
       поменять руками в Discord).
     Если сервер недоступен или категории нет в памяти — кампанию пропускаем.
-    Возвращает (сколько записано, сколько перепривязано)."""
+    Возвращает (сколько записано, сколько перепривязано, у скольких обновлён режим «только ГМ»)."""
     rows = await get_all_campaign_channels()
     known = {row["discord_channel_id"]: row["campaign_id"] for row in rows}
     known_gm_only = {row["discord_channel_id"]: bool(row["gm_only"]) for row in rows}
     campaign_names = {row["campaign_id"]: row["campaign_name"] for row in rows}
-    adopted = moved = 0
+    adopted = moved = gm_updated = 0
 
     for campaign in await get_active_campaigns_with_category():
         guild = bot.get_guild(campaign["guild_id"])
@@ -271,8 +271,9 @@ async def adopt_manual_channels(bot: commands.Bot) -> tuple[int, int]:
                     "Канал %s кампании «%s»: режим «только ГМ» в БД обновлён по правам в Discord → %s",
                     describe_channel(channel), campaign["name"], "да" if gm_only else "нет",
                 )
+                gm_updated += 1
 
-    return adopted, moved
+    return adopted, moved, gm_updated
 
 
 async def cleanup_campaign_channels(bot: commands.Bot) -> int:
@@ -319,9 +320,16 @@ class Campaigns(commands.Cog):
             # 1) кампании с удалённой категорией (их каналы уйдут вместе с ними);
             # 2) каналы, созданные или перенесённые вручную;
             # 3) отдельные удалённые каналы.
-            await cleanup_deleted_categories(self.bot)
-            await adopt_manual_channels(self.bot)
-            await cleanup_campaign_channels(self.bot)
+            wiped = await cleanup_deleted_categories(self.bot)
+            adopted, moved, gm_updated = await adopt_manual_channels(self.bot)
+            removed = await cleanup_campaign_channels(self.bot)
+            # Итог пишется всегда — даже если ничего не нашлось, чтобы по логам
+            # было видно, что сверка вообще прошла.
+            logger.info(
+                "Сверка кампаний завершена: стёрто кампаний — %d, записано новых каналов — %d, "
+                "перепривязано — %d, обновлён режим «только ГМ» — %d, убрано удалённых каналов — %d",
+                wiped, adopted, moved, gm_updated, removed,
+            )
         except Exception:
             logger.exception("Очистка campaign_channels: непредвиденная ошибка")
 

@@ -252,7 +252,10 @@ class EventsCog(commands.Cog):
     @tasks.loop(hours=24 * 7)
     async def cleanup_stale_event_records(self) -> None:
         try:
-            await cleanup_event_records(self.bot)
+            removed = await cleanup_event_records(self.bot)
+            # Итог пишется всегда — даже если ничего не нашлось, чтобы по логам
+            # было видно, что сверка вообще прошла.
+            logger.info("Сверка событий завершена: убрано записей — %d", removed)
         except Exception:
             logger.exception("Очистка event_announcements: непредвиденная ошибка")
 

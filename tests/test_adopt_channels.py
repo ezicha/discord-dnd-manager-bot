@@ -138,7 +138,7 @@ def test_weekly_adopts_channel_created_while_bot_was_off():
         return counts, await channel_rows(conn), camp
 
     counts, rows, camp = run(scenario)
-    assert counts == (1, 0)
+    assert counts == (1, 0, 0)
     assert rows == [(5, camp, 0)]
 
 
@@ -154,7 +154,7 @@ def test_weekly_moves_channel_to_other_campaign():
         return counts, await channel_rows(conn), camp_b
 
     counts, rows, camp_b = run(scenario)
-    assert counts == (0, 1)
+    assert counts == (0, 1, 1)
     assert rows == [(5, camp_b, 1)]  # режим взят из прав относительно новой кампании
 
 
@@ -194,7 +194,7 @@ def test_weekly_leaves_known_channels_alone():
         return await adopt_manual_channels(bot), await channel_rows(conn), camp
 
     counts, rows, camp = run(scenario)
-    assert counts == (0, 0)
+    assert counts == (0, 0, 0)
     assert rows == [(5, camp, 0)]
 
 
@@ -204,7 +204,7 @@ def test_weekly_skips_unavailable_guild():
         bot = make_bot({CATEGORY_A: [make_channel(5, CATEGORY_A)]}, unavailable=True)
         return await adopt_manual_channels(bot), await channel_rows(conn)
 
-    assert run(scenario) == ((0, 0), [])
+    assert run(scenario) == ((0, 0, 0), [])
 
 
 def test_weekly_skips_category_missing_from_cache():
@@ -213,4 +213,4 @@ def test_weekly_skips_category_missing_from_cache():
         bot = make_bot({})
         return await adopt_manual_channels(bot), await channel_rows(conn)
 
-    assert run(scenario) == ((0, 0), [])
+    assert run(scenario) == ((0, 0, 0), [])
