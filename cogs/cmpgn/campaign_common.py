@@ -16,6 +16,26 @@ def slugify(name: str) -> str:
     return name.lower().replace(" ", "-")
 
 
+def campaign_name_conflict(guild: discord.Guild, name: str) -> str | None:
+    """
+    Проверяет, свободно ли название для новой кампании. Возвращает текст
+    для пользователя, если занято, или None, если можно создавать.
+
+    Бот во многих местах находит кампанию по названию (категория «X», роль
+    «X», роль «ГМ: X»), поэтому совпадение с ЛЮБОЙ категорией или ролью
+    сервера приведёт к путанице — запрещаем его заранее.
+    """
+    if not name:
+        return "Название кампании не может быть пустым."
+    if discord.utils.get(guild.categories, name=name):
+        return f"На сервере уже есть категория «{name}». Выбери другое название кампании."
+    if discord.utils.get(guild.roles, name=name):
+        return f"На сервере уже есть роль «{name}». Выбери другое название кампании."
+    if discord.utils.get(guild.roles, name=f"{GM_ROLE_PREFIX}{name}"):
+        return f"На сервере уже есть роль «{GM_ROLE_PREFIX}{name}». Выбери другое название кампании."
+    return None
+
+
 def channel_select_option(ch: discord.abc.GuildChannel) -> discord.SelectOption:
     """
     Собирает SelectOption для одного канала с явным различением войса и
@@ -187,23 +207,32 @@ async def deliver_result(interaction: discord.Interaction, channels: list, messa
     Отправляет итоговое сообщение о выполнении команды не в канал вызова команды,
     а в затронутые текстовые каналы — в каждый из них, если их несколько
     (голосовые каналы из списка просто игнорируются, в них нельзя писать текстом).
-    Взаимодействие при этом закрывается коротким приватным (ephemeral) подтверждением,
-    чтобы у вызвавшего не осталось висящего "бот думает...".
+    Вызвавшему показывается короткое подтверждение short_ack — на месте меню,
+    из которого запущено действие (кнопки меню при этом убираются, чтобы
+    действие нельзя было случайно повторить).
 
     Если среди channels не нашлось ни одного текстового канала (например, у кампании
-    есть только голосовой канал) — само итоговое сообщение уходит вызвавшему как
-    ephemeral-ответ, короткое подтверждение в этом случае не отправляется.
+    есть только голосовой канал) — вызвавшему вместо short_ack показывается
+    само итоговое сообщение.
 
-    Перед вызовом взаимодействие должно быть подтверждено через
-    interaction.response.defer(ephemeral=True).
+    Перед вызовом взаимодействие должно быть подтверждено (defer или edit_message).
     """
     text_channels = [ch for ch in channels if isinstance(ch, discord.TextChannel)]
-    if text_channels:
-        for ch in text_channels:
-            await ch.send(message)
-        await interaction.followup.send(short_ack, ephemeral=True)
-    else:
-        await interaction.followup.send(message, ephemeral=True)
+    for ch in text_channels:
+        await ch.send(message)
+    await finish_menu(interaction, short_ack if text_channels else message)
+
+
+async def finish_menu(interaction: discord.Interaction, text: str) -> None:
+    """
+    Заменяет меню (сообщение, видное только вызвавшему) итоговым текстом
+    и убирает с него кнопки. Если меню нет (например, форма была открыта
+    прямо из команды) — отправляет текст отдельным приватным сообщением.
+    """
+    try:
+        await interaction.edit_original_response(content=text, view=None)
+    except discord.HTTPException:
+        await interaction.followup.send(text, ephemeral=True)
 
 
 def get_gm_campaigns(guild: discord.Guild, member: discord.Member) -> dict:

@@ -1,6 +1,12 @@
 import discord
 
-from .campaign_common import GM_ROLE_PREFIX, deliver_result, logger, move_archive_to_end
+from .campaign_common import (
+    GM_ROLE_PREFIX,
+    campaign_name_conflict,
+    deliver_result,
+    logger,
+    move_archive_to_end,
+)
 from db.campaigns_db import add_campaign_channel, create_campaign
 
 
@@ -34,14 +40,20 @@ class CampaignModal(discord.ui.Modal, title="Новая кампания"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
+        name = self.campaign_name.value.strip()
+        conflict = campaign_name_conflict(interaction.guild, name)
+        if conflict:
+            await interaction.response.send_message(conflict, ephemeral=True)
+            return
+
         view = CampaignPlayersView(
-            campaign_name=self.campaign_name.value,
+            campaign_name=name,
             text_channel_name=self.text_channel_name.value.strip(),
             voice_channel_name=self.voice_channel_name.value.strip(),
             text_channel_topic=self.text_channel_topic.value.strip()
         )
         await interaction.response.send_message(
-            f"Название: **{self.campaign_name.value}**\nВыбери себя и игроков, которых нужно добавить:",
+            f"Название: **{name}**\nВыбери себя и игроков, которых нужно добавить:",
             view=view,
             ephemeral=True
         )
@@ -55,6 +67,9 @@ class CampaignPlayersView(discord.ui.View):
         self.voice_channel_name = voice_channel_name
         self.text_channel_topic = text_channel_topic
         self.selected_players: list[discord.Member] = []
+        # Защита от двойного клика: второе нажатие, пришедшее, пока первое
+        # ещё создаёт роли и каналы, ничего не делает.
+        self.started = False
 
     @discord.ui.select(
         cls=discord.ui.UserSelect,
@@ -68,9 +83,23 @@ class CampaignPlayersView(discord.ui.View):
 
     @discord.ui.button(label="Создать кампанию", style=discord.ButtonStyle.success)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
+        if self.started:
+            await interaction.response.defer()
+            return
+        self.started = True
+        self.stop()
+
         guild = interaction.guild
         name = self.campaign_name
+
+        # Пока игрок выбирал участников, кто-то мог занять название.
+        conflict = campaign_name_conflict(guild, name)
+        if conflict:
+            await interaction.response.edit_message(content=conflict, view=None)
+            return
+
+        # Кнопки убираем сразу — повторно нажать «Создать» будет нельзя.
+        await interaction.response.edit_message(content=f"Создаю кампанию **{name}**…", view=None)
 
         campaign_role = None
         gm_role = None
@@ -143,7 +172,10 @@ class CampaignPlayersView(discord.ui.View):
                 f"Игроки: {players_list}\n"
                 f"Каналы: {channels_text}"
             )
-            await deliver_result(interaction, [text_channel, voice_channel], summary)
+            await deliver_result(
+                interaction, [text_channel, voice_channel], summary,
+                short_ack=f"Кампания **{name}** создана.",
+            )
         except Exception as e:
             logger.error("Ошибка при создании кампании «%s»: %s", name, repr(e))
             # Что-то из роли/категории/каналов могло уже успеть создаться до сбоя —
@@ -156,11 +188,9 @@ class CampaignPlayersView(discord.ui.View):
             if category:
                 created.append(f"категория «{category.name}»")
             created_text = f"\nУспело создаться: {', '.join(created)}." if created else ""
-            await interaction.followup.send(
-                f"Не удалось создать кампанию «{name}» до конца. Ошибка: {e}{created_text}",
-                ephemeral=True
+            await interaction.edit_original_response(
+                content=f"Не удалось создать кампанию «{name}» до конца. Ошибка: {e}{created_text}"
             )
-        self.stop()
 
     @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
