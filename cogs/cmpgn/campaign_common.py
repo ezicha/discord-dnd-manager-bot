@@ -129,6 +129,17 @@ def build_access_overwrites(
     return overwrites
 
 
+def infer_gm_only(channel, player_role_id: int) -> bool | None:
+    """Определяет по правам канала, «только ГМ пишет/говорит» ли он: так бот
+    выставляет права в build_access_overwrites — роли игроков запрещено писать
+    (а в голосовом — подключаться). None — если роли игроков нет и понять нельзя."""
+    role = channel.guild.get_role(player_role_id)
+    if role is None:
+        return None
+    overwrite = channel.overwrites_for(role)
+    return overwrite.send_messages is False or overwrite.connect is False
+
+
 async def get_or_create_archive_category(guild: discord.Guild) -> discord.CategoryChannel:
     """
     Возвращает категорию "Архив", создавая её при необходимости,

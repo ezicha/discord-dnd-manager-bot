@@ -9,6 +9,7 @@ from .campaign_common import (
     channel_select_option,
     deliver_result,
     get_archived_channels_for_campaign,
+    infer_gm_only,
     logger,
     resurrect_channel,
 )
@@ -412,7 +413,19 @@ class ChannelAccessSelectView(discord.ui.View):
     async def select_channel(self, interaction: discord.Interaction, select: discord.ui.Select):
         channel = interaction.guild.get_channel(int(select.values[0]))
         view = ChangeAccessApplyView(channel, self.campaign_role, self.gm_role)
-        await interaction.response.edit_message(content=f"Настрой доступ для {channel.mention}:", view=view)
+        await interaction.response.edit_message(
+            content=f"Доступ для {channel.mention}. Сейчас: {access_mode_text(view.current_gm_only)}.\n"
+                    f"Выбери новый режим и нажми «Применить»:",
+            view=view,
+        )
+        self.stop()
+
+
+def access_mode_text(gm_only: bool | None) -> str:
+    """Режим доступа канала словами — для сообщений ГМу."""
+    if gm_only is None:
+        return "не удалось определить"
+    return "пишет только ГМ, остальные — только просмотр" if gm_only else "пишут все участники"
 
 
 class ChangeAccessApplyView(discord.ui.View):
@@ -421,21 +434,41 @@ class ChangeAccessApplyView(discord.ui.View):
         self.channel = channel
         self.campaign_role = campaign_role
         self.gm_role = gm_role
-        self.gm_only = False
 
-    @discord.ui.select(
-        placeholder="Кто может писать",
-        options=[
-            discord.SelectOption(label="Все участники кампании", value="all"),
-            discord.SelectOption(label="Только ГМ (остальные — только просмотр)", value="gm_only"),
+        # Текущий режим — по правам канала в Discord (как в еженедельной сверке).
+        # None — роль игроков не найдена, режим определить нельзя.
+        self.current_gm_only = infer_gm_only(channel, campaign_role.id) if campaign_role else None
+        self.gm_only = bool(self.current_gm_only)
+
+        # Варианты собираются заново для каждого меню: отметка «выбрано»
+        # (default) у каждого канала своя.
+        self.select_access.options = [
+            discord.SelectOption(
+                label="Все участники кампании", value="all",
+                default=self.current_gm_only is False,
+            ),
+            discord.SelectOption(
+                label="Только ГМ (остальные — только просмотр)", value="gm_only",
+                default=self.current_gm_only is True,
+            ),
         ]
-    )
+
+    @discord.ui.select(placeholder="Кто может писать")
     async def select_access(self, interaction: discord.Interaction, select: discord.ui.Select):
         self.gm_only = select.values[0] == "gm_only"
         await interaction.response.defer()
 
     @discord.ui.button(label="Применить", style=discord.ButtonStyle.success)
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_gm_only is not None and self.gm_only == self.current_gm_only:
+            await interaction.response.edit_message(
+                content=f"Доступ для {self.channel.mention} не изменился: "
+                        f"{access_mode_text(self.gm_only)}.",
+                view=None,
+            )
+            self.stop()
+            return
+
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
 
@@ -454,8 +487,10 @@ class ChangeAccessApplyView(discord.ui.View):
                     "Ошибка БД при изменении доступа канала %s: %s", self.channel.id, repr(db_error)
                 )
 
-            access_text = "только ГМ может писать, остальные — только просмотр" if self.gm_only else "могут писать все участники"
-            await deliver_result(interaction, [self.channel], f"Доступ для {self.channel.mention} обновлён: {access_text}.")
+            await deliver_result(
+                interaction, [self.channel],
+                f"Доступ для {self.channel.mention} обновлён: {access_mode_text(self.gm_only)}.",
+            )
         except Exception as e:
             logger.error("Ошибка при изменении доступа: %s", repr(e))
             await interaction.followup.send(f"Не удалось изменить доступ. Ошибка: {e}", ephemeral=True)

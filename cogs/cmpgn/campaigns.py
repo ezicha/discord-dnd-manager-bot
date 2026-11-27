@@ -5,6 +5,7 @@ from .campaign_archive import ArchiveSelectView
 from .campaign_common import (
     ARCHIVE_CATEGORY_NAME,
     GM_ROLE_PREFIX,
+    infer_gm_only,
     logger,
     resolve_gm_archived_campaigns_from_db,
     resolve_gm_campaigns_from_db,
@@ -281,17 +282,6 @@ async def register_unknown_campaigns(bot: commands.Bot) -> int:
 def channel_type_of(channel) -> str:
     """Тип канала в том виде, в каком он хранится в БД."""
     return "voice" if isinstance(channel, (discord.VoiceChannel, discord.StageChannel)) else "text"
-
-
-def infer_gm_only(channel, player_role_id: int) -> bool | None:
-    """Определяет по правам канала, «только ГМ пишет/говорит» ли он: так бот
-    выставляет права в build_access_overwrites — роли игроков запрещено писать
-    (а в голосовом — подключаться). None — если роли игроков нет и понять нельзя."""
-    role = channel.guild.get_role(player_role_id)
-    if role is None:
-        return None
-    overwrite = channel.overwrites_for(role)
-    return overwrite.send_messages is False or overwrite.connect is False
 
 
 async def handle_channel_created(channel) -> bool:
