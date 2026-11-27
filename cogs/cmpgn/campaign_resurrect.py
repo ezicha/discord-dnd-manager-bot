@@ -1,5 +1,7 @@
 import discord
 
+from cogs.menu import Menu
+
 from .campaign_common import (
     GM_ROLE_PREFIX,
     SELECT_OPTIONS_LIMIT,
@@ -19,7 +21,7 @@ MAX_CHANNELS_FOR_RENAME = 4
 
 # --- Выбор кампании для восстановления (если заархивированных кампаний несколько) ---
 
-class ResurrectSelectView(discord.ui.View):
+class ResurrectSelectView(Menu):
     def __init__(self, campaigns: dict):
         super().__init__(timeout=120)
         self.campaigns = campaigns
@@ -48,12 +50,13 @@ class ResurrectSelectView(discord.ui.View):
                 ),
                 view=view,
             )
+            view.remember(interaction)
         else:
             modal = ResurrectModal(chosen_name, campaign_role, gm_role, channels)
             await interaction.response.send_modal(modal)
 
 
-class ResurrectChannelPickView(discord.ui.View):
+class ResurrectChannelPickView(Menu):
     """
     Показывается, только когда у кампании больше MAX_CHANNELS_FOR_RENAME
     заархивированных каналов. Восстанавливаются всегда ВСЕ каналы кампании —
@@ -94,7 +97,6 @@ class ResurrectChannelPickView(discord.ui.View):
             rename_channels=rename_channels,
         )
         await interaction.response.send_modal(modal)
-        self.stop()
 
     @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):

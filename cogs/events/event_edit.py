@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import discord
 
+from cogs.menu import Menu
+
 from db.events_db import get_event_record
 from .event_common import SERVER_TZ, can_manage_event, get_campaign_id_for_channel
 from .event_create import EventCreateView
@@ -58,9 +60,10 @@ class EventEditSelect(discord.ui.Select):
             existing_announcement_channel_id=old_channel_id,
         )
         await interaction.response.edit_message(content=None, embed=view.build_embed(), view=view)
+        view.remember(interaction)
 
 
-class EventEditSelectView(discord.ui.View):
+class EventEditSelectView(Menu):
     def __init__(
         self,
         campaign_name: str,
@@ -72,7 +75,7 @@ class EventEditSelectView(discord.ui.View):
         self.requester = requester
         self.add_item(EventEditSelect(self, campaign_name, text_channels, events))
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def check_user(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.requester.id:
             await interaction.response.send_message("Эта форма не для тебя.", ephemeral=True)
             return False

@@ -1,11 +1,14 @@
 import discord
 
+from cogs.menu import Menu
+
 from .campaign_common import (
     ARCHIVE_CATEGORY_NAME,
     archive_channel,
     build_select_options,
     channel_options,
     deliver_result,
+    finish_menu,
     get_or_create_archive_category,
     logger,
     slugify,
@@ -15,7 +18,7 @@ from db.campaigns_db import archive_campaign, archive_campaign_channel, get_camp
 
 # --- Архивация одной/нескольких кампаний целиком ---
 
-class ArchiveSelectView(discord.ui.View):
+class ArchiveSelectView(Menu):
     # Модальное окно с префиксами (ArchivePrefixModal) даёт по одному текстовому полю
     # на кампанию, а Discord не позволяет больше 5 полей в одной модалке — поэтому
     # за раз нельзя архивировать больше 5 кампаний.
@@ -137,25 +140,30 @@ class ArchivePrefixModal(discord.ui.Modal, title="Префиксы для арх
                 else:
                     no_text_channel_summaries.append(campaign_message)
 
+            # Итог — на месте меню, кнопки меню убираются.
+            final_text = "Готово."
             if no_text_channel_summaries:
-                await interaction.followup.send(
-                    "Нет текстового канала, чтобы отправить туда итог, для:\n" + "\n".join(no_text_channel_summaries),
-                    ephemeral=True
+                final_text = (
+                    "Нет текстового канала, чтобы отправить туда итог, для:\n"
+                    + "\n".join(no_text_channel_summaries)
                 )
-            if any_text_channel_found:
-                await interaction.followup.send("Готово.", ephemeral=True)
+                if any_text_channel_found:
+                    final_text = "Готово.\n" + final_text
+            await finish_menu(interaction, final_text)
         except Exception as e:
             logger.error("Ошибка при архивации: %s", repr(e))
             done_text = "\n".join(archived_summary) if archived_summary else "ничего не успело обработаться"
-            await interaction.followup.send(
+            # Меню тоже убираем: часть кампаний уже в архиве, повторное нажатие
+            # «Архивировать выбранное» сработало бы на уже удалённых категориях.
+            await finish_menu(
+                interaction,
                 f"Что-то пошло не так во время архивации.\nУспело обработаться:\n{done_text}\nОшибка: {e}",
-                ephemeral=True
             )
 
 
 # --- Архивация одного/нескольких каналов внутри одной кампании (вызывается из меню редактирования) ---
 
-class ArchiveSingleChannelView(discord.ui.View):
+class ArchiveSingleChannelView(Menu):
     def __init__(self, campaign_name, category, campaign_role, gm_role):
         super().__init__(timeout=120)
         self.campaign_name = campaign_name

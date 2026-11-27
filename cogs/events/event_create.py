@@ -8,6 +8,8 @@ from datetime import timedelta
 
 import discord
 
+from cogs.menu import Menu
+
 from db.events_db import get_event_record, record_event, update_event_announcement
 from .event_common import (
     MAX_DAYS_AHEAD,
@@ -220,6 +222,7 @@ class CreateEventButton(discord.ui.Button):
 
         for item in v.children:
             item.disabled = True
+        v.stop()  # меню выполнило своё дело — помечать его «устаревшим» не нужно
         await interaction.response.edit_message(
             content=f"Готово! Событие «{v.title}» создано: {event.url}{announce_note}",
             embed=v.build_embed(), view=v,
@@ -279,6 +282,7 @@ class CreateEventButton(discord.ui.Button):
 
         for item in v.children:
             item.disabled = True
+        v.stop()
         await interaction.response.edit_message(
             content=f"Готово! Событие «{v.title}» обновлено: {updated_event.url}{announce_note}",
             embed=v.build_embed(), view=v,
@@ -296,7 +300,7 @@ class CancelButton(discord.ui.Button):
         self.parent_view.stop()
 
 
-class EventCreateView(discord.ui.View):
+class EventCreateView(Menu):
     # Ряды: 0 — Пн–Пт (5 кнопок), 1 — ◀/Сб/Вс/▶ (4 кнопки),
     # 2..N — селекты каналов (если их больше одного), последний ряд — кнопки действий.
     def __init__(
@@ -379,7 +383,7 @@ class EventCreateView(discord.ui.View):
         self.add_item(CreateEventButton(self, row=row))
         self.add_item(CancelButton(self, row=row))
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def check_user(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.requester.id:
             await interaction.response.send_message(
                 "Эта форма не для тебя.", ephemeral=True

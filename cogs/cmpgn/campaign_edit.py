@@ -1,5 +1,7 @@
 import discord
 
+from cogs.menu import Menu
+
 from .campaign_archive import ArchiveSingleChannelView
 from .campaign_common import (
     SELECT_OPTIONS_LIMIT,
@@ -24,7 +26,7 @@ from db.campaigns_db import (
 
 # --- Выбор кампании для редактирования (если их несколько) ---
 
-class CampaignEditSelectView(discord.ui.View):
+class CampaignEditSelectView(Menu):
     def __init__(self, campaigns: dict):
         super().__init__(timeout=120)
         self.campaigns = campaigns
@@ -44,11 +46,12 @@ class CampaignEditSelectView(discord.ui.View):
         await interaction.response.edit_message(
             content=f"Редактирование кампании **{chosen_name}**:", view=menu
         )
+        menu.remember(interaction)
 
 
 # --- Главное меню редактирования ---
 
-class CampaignEditMenuView(discord.ui.View):
+class CampaignEditMenuView(Menu):
     def __init__(self, campaign_name, category, campaign_role, gm_role):
         super().__init__(timeout=180)
         self.campaign_name = campaign_name
@@ -60,6 +63,7 @@ class CampaignEditMenuView(discord.ui.View):
     async def add_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = AddChannelTypeView(self.category, self.campaign_role, self.gm_role)
         await interaction.response.edit_message(content="Настрой новый канал:", view=view)
+        view.remember(interaction)
 
     @discord.ui.button(label="Архивировать канал", style=discord.ButtonStyle.danger)
     async def archive_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -69,6 +73,7 @@ class CampaignEditMenuView(discord.ui.View):
             return
         view = ArchiveSingleChannelView(self.campaign_name, self.category, self.campaign_role, self.gm_role)
         await interaction.response.edit_message(content="Выбери каналы для архивации:", view=view)
+        view.remember(interaction)
 
     @discord.ui.button(label="Восстановить канал", style=discord.ButtonStyle.success)
     async def restore_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -78,6 +83,7 @@ class CampaignEditMenuView(discord.ui.View):
             return
         view = RestoreChannelSelectView(self.category, self.campaign_role, self.gm_role, archived_channels)
         await interaction.response.edit_message(content="Выбери каналы, которые вернуть из архива:", view=view)
+        view.remember(interaction)
 
     @discord.ui.button(label="Редактировать канал", style=discord.ButtonStyle.primary)
     async def rename_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -87,6 +93,7 @@ class CampaignEditMenuView(discord.ui.View):
             return
         view = RenameChannelSelectView(self.category)
         await interaction.response.edit_message(content="Какой канал изменить?", view=view)
+        view.remember(interaction)
 
     @discord.ui.button(label="Изменить доступ", style=discord.ButtonStyle.primary)
     async def change_access(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -96,6 +103,7 @@ class CampaignEditMenuView(discord.ui.View):
             return
         view = ChannelAccessSelectView(self.category, self.campaign_role, self.gm_role)
         await interaction.response.edit_message(content="Какому каналу изменить доступ?", view=view)
+        view.remember(interaction)
 
     @discord.ui.button(label="Закрыть", style=discord.ButtonStyle.secondary)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -107,7 +115,7 @@ class CampaignEditMenuView(discord.ui.View):
 # (для случая, когда кампания активна, а один из её каналов заранее
 # заархивировали отдельно через кнопку «Архивировать канал» выше)
 
-class RestoreChannelSelectView(discord.ui.View):
+class RestoreChannelSelectView(Menu):
     # Дальше открывается модалка с одним полем переименования на канал —
     # Discord не даёт больше 5 полей в одной модалке, поэтому и восстановить
     # с переименованием за раз можно не больше 5 каналов.
@@ -147,7 +155,6 @@ class RestoreChannelSelectView(discord.ui.View):
         channels = [ch for ch in self.archived_channels if str(ch.id) in chosen_ids]
         modal = RestoreChannelRenameModal(self.category, self.campaign_role, self.gm_role, channels)
         await interaction.response.send_modal(modal)
-        self.stop()
 
     @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -235,7 +242,7 @@ class RestoreChannelRenameModal(discord.ui.Modal, title="Вернуть кана
 
 # --- Добавление канала: тип + доступ ---
 
-class AddChannelTypeView(discord.ui.View):
+class AddChannelTypeView(Menu):
     def __init__(self, category, campaign_role, gm_role):
         super().__init__(timeout=180)
         self.category = category
@@ -347,7 +354,7 @@ class AddChannelModal(discord.ui.Modal, title="Новый канал"):
 
 # --- Переименование / изменение описания канала ---
 
-class RenameChannelSelectView(discord.ui.View):
+class RenameChannelSelectView(Menu):
     def __init__(self, category):
         super().__init__(timeout=120)
         self.category = category
@@ -396,7 +403,7 @@ class RenameChannelModal(discord.ui.Modal, title="Изменить канал"):
 
 # --- Изменение доступа существующего канала ---
 
-class ChannelAccessSelectView(discord.ui.View):
+class ChannelAccessSelectView(Menu):
     def __init__(self, category, campaign_role, gm_role):
         super().__init__(timeout=120)
         self.category = category
@@ -418,6 +425,7 @@ class ChannelAccessSelectView(discord.ui.View):
                     f"Выбери новый режим и нажми «Применить»:",
             view=view,
         )
+        view.remember(interaction)
         self.stop()
 
 
@@ -428,7 +436,7 @@ def access_mode_text(gm_only: bool | None) -> str:
     return "пишет только ГМ, остальные — только просмотр" if gm_only else "пишут все участники"
 
 
-class ChangeAccessApplyView(discord.ui.View):
+class ChangeAccessApplyView(Menu):
     def __init__(self, channel, campaign_role, gm_role):
         super().__init__(timeout=120)
         self.channel = channel

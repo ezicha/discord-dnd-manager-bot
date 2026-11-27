@@ -67,6 +67,7 @@ class CampaignGroup(discord.app_commands.Group):
             await interaction.response.send_message(
                 "Выбери кампанию для архивирования:", view=view, ephemeral=True
             )
+            view.remember(interaction)
         except Exception as e:
             logger.error("Ошибка в /campaign archive: %s", repr(e))
             if not interaction.response.is_done():
@@ -90,9 +91,11 @@ class CampaignGroup(discord.app_commands.Group):
                 name, (category, campaign_role, gm_role) = next(iter(campaigns.items()))
                 menu = CampaignEditMenuView(name, category, campaign_role, gm_role)
                 await interaction.response.send_message(f"Редактирование кампании **{name}**:", view=menu, ephemeral=True)
+                menu.remember(interaction)
             else:
                 view = CampaignEditSelectView(campaigns)
                 await interaction.response.send_message("Какую кампанию редактировать?", view=view, ephemeral=True)
+                view.remember(interaction)
         except Exception as e:
             logger.error("Ошибка в /campaign edit: %s", repr(e))
             if not interaction.response.is_done():
@@ -124,6 +127,7 @@ class CampaignGroup(discord.app_commands.Group):
                         f"Восстановлены при этом будут все каналы, независимо от выбора здесь.",
                         view=view, ephemeral=True
                     )
+                    view.remember(interaction)
                 else:
                     modal = ResurrectModal(name, campaign_role, gm_role, channels)
                     await interaction.response.send_modal(modal)
@@ -132,6 +136,7 @@ class CampaignGroup(discord.app_commands.Group):
                 await interaction.response.send_message(
                     "Какую кампанию вернуть из архива?", view=view, ephemeral=True
                 )
+                view.remember(interaction)
         except Exception as e:
             logger.error("Ошибка в /campaign resurrect: %s", repr(e))
             if not interaction.response.is_done():

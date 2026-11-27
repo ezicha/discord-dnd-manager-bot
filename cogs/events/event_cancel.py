@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import discord
 
+from cogs.menu import Menu
+
 from db.events_db import get_event_record
 from .event_common import SERVER_TZ, can_manage_event, remove_event_announcement_and_record
 
@@ -72,7 +74,7 @@ class DeclineCancelButton(discord.ui.Button):
         await interaction.response.edit_message(content="Отмена события отменена.", view=None)
 
 
-class EventCancelView(discord.ui.View):
+class EventCancelView(Menu):
     def __init__(self, campaign_name: str, events: list[discord.ScheduledEvent], requester: discord.Member):
         super().__init__(timeout=300)
         self.campaign_name = campaign_name
@@ -89,7 +91,7 @@ class EventCancelView(discord.ui.View):
             self.add_item(ConfirmCancelButton(self, row=0))
             self.add_item(DeclineCancelButton(row=0))
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def check_user(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.requester.id:
             await interaction.response.send_message("Эта форма не для тебя.", ephemeral=True)
             return False

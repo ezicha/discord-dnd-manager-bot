@@ -76,6 +76,7 @@ class EventGroup(app_commands.Group):
                 generate_calendar_text_for_week(view.week_start),
             )
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            view.remember(interaction)
         except Exception:
             logger.exception("Ошибка в /event create")
             msg = "Что-то пошло не так."
@@ -122,6 +123,7 @@ class EventGroup(app_commands.Group):
             await interaction.response.send_message(
                 "Выбери событие, которое нужно отредактировать:", view=view, ephemeral=True
             )
+            view.remember(interaction)
         except Exception:
             logger.exception("Ошибка в /event edit")
             msg = "Что-то пошло не так."
@@ -168,6 +170,7 @@ class EventGroup(app_commands.Group):
             await interaction.response.send_message(
                 "Выбери событие, которое нужно отменить:", view=view, ephemeral=True
             )
+            view.remember(interaction)
         except Exception:
             logger.exception("Ошибка в /event cancel")
             msg = "Что-то пошло не так."

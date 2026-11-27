@@ -1,5 +1,7 @@
 import discord
 
+from cogs.menu import Menu
+
 from .campaign_common import (
     GM_ROLE_PREFIX,
     campaign_name_conflict,
@@ -57,9 +59,10 @@ class CampaignModal(discord.ui.Modal, title="Новая кампания"):
             view=view,
             ephemeral=True
         )
+        view.remember(interaction)
 
 
-class CampaignPlayersView(discord.ui.View):
+class CampaignPlayersView(Menu):
     def __init__(self, campaign_name: str, text_channel_name: str, voice_channel_name: str, text_channel_topic: str):
         super().__init__(timeout=300)
         self.campaign_name = campaign_name

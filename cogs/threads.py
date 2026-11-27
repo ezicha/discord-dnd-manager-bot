@@ -5,6 +5,8 @@ from discord import app_commands
 from discord.ext import commands
 from discord.http import Route
 
+from cogs.menu import Menu
+
 SPOILER_CHANNEL_FLAG = 1 << 21
 
 logger = logging.getLogger("argus")
@@ -18,6 +20,7 @@ class ThreadNameModal(discord.ui.Modal, title="Создать приватный
         await interaction.response.send_message(
             "Выбери участников треда:", view=view, ephemeral=True
         )
+        view.remember(interaction)
 
 
 class ThreadMembersSelect(discord.ui.UserSelect):
@@ -124,7 +127,7 @@ class ThreadCreateConfirmButton(discord.ui.Button):
         )
 
 
-class ThreadMembersView(discord.ui.View):
+class ThreadMembersView(Menu):
     def __init__(self, thread_name: str, channel: discord.abc.GuildChannel):
         super().__init__(timeout=180)
         self.thread_name = thread_name
