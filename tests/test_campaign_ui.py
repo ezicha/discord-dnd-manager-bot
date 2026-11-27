@@ -89,3 +89,32 @@ def test_access_menu_without_player_role():
     assert view.current_gm_only is None
     assert selected_values(view) == []
     assert access_mode_text(None) == "не удалось определить"
+
+
+# --- Архивация канала: ровно один запрос к Discord ---
+
+from cogs.cmpgn.campaign_common import archive_channel  # noqa: E402
+
+
+def test_archive_channel_makes_single_request():
+    everyone, players, gm = object(), object(), object()
+    edits = []
+
+    async def edit(**kwargs):
+        edits.append(kwargs)
+
+    channel = SimpleNamespace(name="общий", overwrites={}, edit=edit)
+    guild = SimpleNamespace(default_role=everyone)
+    archive = object()
+
+    asyncio.run(archive_channel(guild, channel, archive, "лекторий", players, gm))
+
+    assert len(edits) == 1
+    edit_args = edits[0]
+    assert edit_args["category"] is archive
+    assert edit_args["name"] == "лекторий-общий"
+    assert edit_args["sync_permissions"] is False
+    overwrites = edit_args["overwrites"]
+    assert overwrites[everyone].view_channel is False
+    assert overwrites[players].send_messages is False
+    assert overwrites[gm].send_messages is False

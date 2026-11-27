@@ -5,6 +5,7 @@ from .campaign_archive import ArchiveSelectView
 from .campaign_common import (
     ARCHIVE_CATEGORY_NAME,
     GM_ROLE_PREFIX,
+    describe_error,
     infer_gm_only,
     logger,
     resolve_gm_archived_campaigns_from_db,
@@ -47,7 +48,7 @@ class CampaignGroup(discord.app_commands.Group):
         except Exception as e:
             logger.error("Ошибка при открытии формы /campaign create: %s", repr(e))
             if not interaction.response.is_done():
-                await interaction.response.send_message(f"Не удалось открыть форму. Ошибка: {e}", ephemeral=True)
+                await interaction.response.send_message(f"Не удалось открыть форму. {describe_error(e)}", ephemeral=True)
 
     @discord.app_commands.command(name="archive", description="Архивировать одну из своих кампаний (только для ГМа)")
     async def archive(self, interaction: discord.Interaction):
@@ -71,7 +72,7 @@ class CampaignGroup(discord.app_commands.Group):
         except Exception as e:
             logger.error("Ошибка в /campaign archive: %s", repr(e))
             if not interaction.response.is_done():
-                await interaction.response.send_message(f"Что-то пошло не так. Ошибка: {e}", ephemeral=True)
+                await interaction.response.send_message(f"Что-то пошло не так. {describe_error(e)}", ephemeral=True)
 
     @discord.app_commands.command(name="edit", description="Редактировать одну из своих кампаний (только для ГМа)")
     async def edit(self, interaction: discord.Interaction):
@@ -99,7 +100,7 @@ class CampaignGroup(discord.app_commands.Group):
         except Exception as e:
             logger.error("Ошибка в /campaign edit: %s", repr(e))
             if not interaction.response.is_done():
-                await interaction.response.send_message(f"Что-то пошло не так. Ошибка: {e}", ephemeral=True)
+                await interaction.response.send_message(f"Что-то пошло не так. {describe_error(e)}", ephemeral=True)
 
     @discord.app_commands.command(name="resurrect", description="Вернуть заархивированную кампанию из архива (только для ГМа)")
     async def resurrect(self, interaction: discord.Interaction):
@@ -140,7 +141,7 @@ class CampaignGroup(discord.app_commands.Group):
         except Exception as e:
             logger.error("Ошибка в /campaign resurrect: %s", repr(e))
             if not interaction.response.is_done():
-                await interaction.response.send_message(f"Что-то пошло не так. Ошибка: {e}", ephemeral=True)
+                await interaction.response.send_message(f"Что-то пошло не так. {describe_error(e)}", ephemeral=True)
 
 
 def describe_channel(channel) -> str:

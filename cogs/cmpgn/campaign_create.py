@@ -5,6 +5,7 @@ from cogs.menu import Menu
 from .campaign_common import (
     GM_ROLE_PREFIX,
     campaign_name_conflict,
+    describe_error,
     deliver_result,
     logger,
     move_archive_to_end,
@@ -192,7 +193,7 @@ class CampaignPlayersView(Menu):
                 created.append(f"категория «{category.name}»")
             created_text = f"\nУспело создаться: {', '.join(created)}." if created else ""
             await interaction.edit_original_response(
-                content=f"Не удалось создать кампанию «{name}» до конца. Ошибка: {e}{created_text}"
+                content=f"Не удалось создать кампанию «{name}» до конца. {describe_error(e)}{created_text}"
             )
 
     @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)

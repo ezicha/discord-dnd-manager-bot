@@ -2,6 +2,9 @@ import logging
 logger = logging.getLogger("argus")
 
 import discord
+# Общие для всех меню хелперы — импортируются сюда, чтобы файлы кампаний
+# брали всё нужное из одного места.
+from cogs.menu import describe_error, finish_menu, start_action  # noqa: F401
 from db.campaigns_db import get_gm_archived_campaigns as db_get_gm_archived_campaigns
 from db.campaigns_db import get_gm_campaigns as db_get_gm_campaigns
 
@@ -167,12 +170,15 @@ async def archive_channel(guild, channel, archive_category, prefix, campaign_rol
     """
     Переносит один канал в архивную категорию, переименовывает с префиксом
     и выставляет права "только просмотр" (без записи, без подключения для голоса).
+
+    Всё — одним запросом к Discord: на изменения каналов у Discord жёсткие
+    лимиты (название — не больше 2 раз за 10 минут), лишние запросы
+    приближают их.
     """
     is_voice = isinstance(channel, discord.VoiceChannel)
     new_name = f"{prefix}-{channel.name}"
-    await channel.edit(category=archive_category, name=new_name, sync_permissions=False)
 
-    overwrites = channel.overwrites
+    overwrites = dict(channel.overwrites)
     overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
     if campaign_role:
         overwrites[campaign_role] = discord.PermissionOverwrite(
@@ -182,7 +188,9 @@ async def archive_channel(guild, channel, archive_category, prefix, campaign_rol
         overwrites[gm_role] = discord.PermissionOverwrite(
             view_channel=True, send_messages=False, connect=(False if is_voice else None)
         )
-    await channel.edit(overwrites=overwrites)
+    await channel.edit(
+        category=archive_category, name=new_name, overwrites=overwrites, sync_permissions=False
+    )
     return channel
 
 async def resurrect_channel(guild, channel, category, campaign_role, gm_role, new_name: str | None = None, gm_only: bool = False):
@@ -226,24 +234,12 @@ async def deliver_result(interaction: discord.Interaction, channels: list, messa
     есть только голосовой канал) — вызвавшему вместо short_ack показывается
     само итоговое сообщение.
 
-    Перед вызовом взаимодействие должно быть подтверждено (defer или edit_message).
+    Перед вызовом взаимодействие должно быть подтверждено (start_action, defer или edit_message).
     """
     text_channels = [ch for ch in channels if isinstance(ch, discord.TextChannel)]
     for ch in text_channels:
         await ch.send(message)
     await finish_menu(interaction, short_ack if text_channels else message)
-
-
-async def finish_menu(interaction: discord.Interaction, text: str) -> None:
-    """
-    Заменяет меню (сообщение, видное только вызвавшему) итоговым текстом
-    и убирает с него кнопки. Если меню нет (например, форма была открыта
-    прямо из команды) — отправляет текст отдельным приватным сообщением.
-    """
-    try:
-        await interaction.edit_original_response(content=text, view=None)
-    except discord.HTTPException:
-        await interaction.followup.send(text, ephemeral=True)
 
 
 def get_gm_campaigns(guild: discord.Guild, member: discord.Member) -> dict:

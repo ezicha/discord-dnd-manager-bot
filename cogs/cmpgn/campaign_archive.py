@@ -8,10 +8,12 @@ from .campaign_common import (
     build_select_options,
     channel_options,
     deliver_result,
+    describe_error,
     finish_menu,
     get_or_create_archive_category,
     logger,
     slugify,
+    start_action,
 )
 from db.campaigns_db import archive_campaign, archive_campaign_channel, get_campaign_id_by_category
 
@@ -77,15 +79,15 @@ class ArchivePrefixModal(discord.ui.Modal, title="Префиксы для арх
             self.add_item(field)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        await start_action(interaction, "Архивирую кампании…")
         guild = interaction.guild
-
-        archive_category = await get_or_create_archive_category(guild)
 
         archived_summary = []
         archived_per_campaign = []
 
         try:
+            archive_category = await get_or_create_archive_category(guild)
+
             for chosen_name in self.chosen_names:
                 category, campaign_role, gm_role = self.campaigns[chosen_name]
                 prefix = self.prefix_inputs[chosen_name].value.strip() or slugify(chosen_name)
@@ -157,7 +159,8 @@ class ArchivePrefixModal(discord.ui.Modal, title="Префиксы для арх
             # «Архивировать выбранное» сработало бы на уже удалённых категориях.
             await finish_menu(
                 interaction,
-                f"Что-то пошло не так во время архивации.\nУспело обработаться:\n{done_text}\nОшибка: {e}",
+                f"Что-то пошло не так во время архивации.\nУспело обработаться:\n{done_text}\n"
+                f"{describe_error(e)}",
             )
 
 
@@ -210,19 +213,21 @@ class SingleArchivePrefixModal(discord.ui.Modal, title="Префикс для а
         self.prefix.default = slugify(campaign_name)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        await start_action(interaction, "Архивирую каналы…")
         guild = interaction.guild
-
-        archive_category = await get_or_create_archive_category(guild)
 
         prefix = self.prefix.value.strip() or slugify(self.campaign_name)
         moved = []
+        current = None  # канал, на котором остановились, если что-то пошло не так
 
         try:
+            archive_category = await get_or_create_archive_category(guild)
+
             for channel_id in self.chosen_channel_ids:
                 channel = guild.get_channel(int(channel_id))
                 if channel is None:
                     continue
+                current = channel
                 await archive_channel(guild, channel, archive_category, prefix, self.campaign_role, self.gm_role)
                 moved.append(channel)
 
@@ -242,7 +247,12 @@ class SingleArchivePrefixModal(discord.ui.Modal, title="Префикс для а
         except Exception as e:
             logger.error("Ошибка при архивации каналов: %s", repr(e))
             done_text = ", ".join(ch.mention for ch in moved) or "ничего не успело перенестись"
-            await interaction.followup.send(
-                f"Что-то пошло не так при архивации.\nУспело обработаться: {done_text}\nОшибка: {e}",
-                ephemeral=True
+            stopped_text = (
+                f"Остановилось на канале {current.mention} — он и следующие не тронуты.\n"
+                if current is not None and current not in moved else ""
+            )
+            await finish_menu(
+                interaction,
+                f"Что-то пошло не так при архивации.\nУспело обработаться: {done_text}\n"
+                f"{stopped_text}{describe_error(e)}",
             )

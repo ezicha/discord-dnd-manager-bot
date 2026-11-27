@@ -10,10 +10,13 @@ from .campaign_common import (
     channel_options,
     channel_select_option,
     deliver_result,
+    describe_error,
+    finish_menu,
     get_archived_channels_for_campaign,
     infer_gm_only,
     logger,
     resurrect_channel,
+    start_action,
 )
 from db.campaigns_db import (
     add_campaign_channel,
@@ -188,13 +191,15 @@ class RestoreChannelRenameModal(discord.ui.Modal, title="Вернуть кана
             self.add_item(field)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        await start_action(interaction, "Возвращаю каналы из архива…")
         guild = interaction.guild
         restored = []
         renamed_from = {}
+        current = None  # канал, на котором остановились, если что-то пошло не так
 
         try:
             for channel in self.channels:
+                current = channel
                 field = self.name_inputs.get(channel.id)
                 new_name = field.value.strip() if field else None
                 old_name = channel.name
@@ -234,9 +239,14 @@ class RestoreChannelRenameModal(discord.ui.Modal, title="Вернуть кана
         except Exception as e:
             logger.error("Ошибка при восстановлении каналов: %s", repr(e))
             done_text = ", ".join(ch.mention for ch in restored) or "ничего не успело восстановиться"
-            await interaction.followup.send(
-                f"Что-то пошло не так при восстановлении.\nУспело обработаться: {done_text}\nОшибка: {e}",
-                ephemeral=True
+            stopped_text = (
+                f"Остановилось на канале {current.mention} — он и следующие остались в архиве.\n"
+                if current is not None and current not in restored else ""
+            )
+            await finish_menu(
+                interaction,
+                f"Что-то пошло не так при восстановлении.\nУспело обработаться: {done_text}\n"
+                f"{stopped_text}{describe_error(e)}",
             )
 
 
@@ -303,8 +313,7 @@ class AddChannelModal(discord.ui.Modal, title="Новый канал"):
 
     async def on_submit(self, interaction: discord.Interaction):
         logger.debug("on_submit вызван, название: %s", self.channel_name.value)
-        await interaction.response.defer(ephemeral=True)
-        logger.debug("defer прошёл успешно")
+        await start_action(interaction, "Создаю канал…")
         guild = interaction.guild
 
         is_voice = self.channel_type == "voice"
@@ -349,7 +358,7 @@ class AddChannelModal(discord.ui.Modal, title="Новый канал"):
             # Раньше здесь ошибка только логировалась, а пользователь не получал
             # никакого ответа — взаимодействие просто зависало. Теперь сообщаем и ему.
             logger.error("Ошибка при создании канала: %s", repr(e))
-            await interaction.followup.send(f"Не удалось создать канал. Ошибка: {e}", ephemeral=True)
+            await finish_menu(interaction, f"Не удалось создать канал. {describe_error(e)}")
 
 
 # --- Переименование / изменение описания канала ---
@@ -389,16 +398,30 @@ class RenameChannelModal(discord.ui.Modal, title="Изменить канал"):
             self.new_topic.default = channel.topic or ""
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        # Отправляем в Discord только то, что действительно изменилось: смена
+        # названия и описания канала у Discord ограничена (2 раза за 10 минут).
+        changes = {}
+        new_name = self.new_name.value.strip()
+        if new_name and new_name != self.channel.name:
+            changes["name"] = new_name
+        if isinstance(self.channel, discord.TextChannel):
+            new_topic = self.new_topic.value.strip() or None
+            if new_topic != (self.channel.topic or None):
+                changes["topic"] = new_topic
+
+        if not changes:
+            await interaction.response.edit_message(
+                content=f"В канале {self.channel.mention} ничего не изменилось.", view=None
+            )
+            return
+
+        await start_action(interaction, "Сохраняю изменения канала…")
         try:
-            if isinstance(self.channel, discord.TextChannel):
-                await self.channel.edit(name=self.new_name.value, topic=self.new_topic.value.strip() or None)
-            else:
-                await self.channel.edit(name=self.new_name.value)
+            await self.channel.edit(**changes)
             await deliver_result(interaction, [self.channel], f"Канал {self.channel.mention} обновлён.")
         except Exception as e:
             logger.error("Ошибка при редактировании канала: %s", repr(e))
-            await interaction.followup.send(f"Не удалось изменить канал. Ошибка: {e}", ephemeral=True)
+            await finish_menu(interaction, f"Не удалось изменить канал. {describe_error(e)}")
 
 
 # --- Изменение доступа существующего канала ---
@@ -477,7 +500,8 @@ class ChangeAccessApplyView(Menu):
             self.stop()
             return
 
-        await interaction.response.defer(ephemeral=True)
+        self.stop()
+        await start_action(interaction, "Меняю доступ…")
         guild = interaction.guild
 
         try:
@@ -501,8 +525,7 @@ class ChangeAccessApplyView(Menu):
             )
         except Exception as e:
             logger.error("Ошибка при изменении доступа: %s", repr(e))
-            await interaction.followup.send(f"Не удалось изменить доступ. Ошибка: {e}", ephemeral=True)
-        self.stop()
+            await finish_menu(interaction, f"Не удалось изменить доступ. {describe_error(e)}")
 
     @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):

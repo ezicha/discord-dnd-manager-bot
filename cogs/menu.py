@@ -15,12 +15,57 @@
 """
 
 import logging
+import math
 
 import discord
 
 logger = logging.getLogger("argus")
 
 STALE_NOTE = "⌛ Меню устарело — вызови команду заново."
+
+
+def describe_error(error: BaseException) -> str:
+    """
+    Текст ошибки для пользователя. Отдельно — случай, когда Discord просит
+    подождать дольше, чем бот готов ждать (max_ratelimit_timeout в argus.py):
+    чаще всего это лимит на переименование канала — 2 раза за 10 минут.
+    """
+    if isinstance(error, discord.RateLimited):
+        minutes = max(1, math.ceil(error.retry_after / 60))
+        return (
+            "Discord временно не даёт боту это сделать: он ограничивает частоту изменений "
+            "(например, название канала можно менять не больше 2 раз за 10 минут). "
+            f"Попробуй примерно через {minutes} мин."
+        )
+    return f"Ошибка: {error}"
+
+
+async def start_action(interaction: discord.Interaction, text: str) -> None:
+    """
+    Вызывается в самом начале действия, которое что-то меняет в Discord
+    (вместо interaction.response.defer). Сразу заменяет меню текстом вроде
+    «Архивирую каналы…» и убирает кнопки — чтобы действие нельзя было
+    запустить второй раз, пока первое ещё идёт (а идти оно может долго:
+    Discord ограничивает частоту изменений). Итог потом показывает finish_menu.
+
+    Если меню нет (форма открыта прямо из команды) — показывает «бот думает…».
+    """
+    if interaction.message is not None:
+        await interaction.response.edit_message(content=text, view=None)
+    else:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+
+async def finish_menu(interaction: discord.Interaction, text: str) -> None:
+    """
+    Заменяет меню (сообщение, видное только вызвавшему) итоговым текстом
+    и убирает с него кнопки. Если меню нет (например, форма была открыта
+    прямо из команды) — отправляет текст отдельным приватным сообщением.
+    """
+    try:
+        await interaction.edit_original_response(content=text, view=None)
+    except discord.HTTPException:
+        await interaction.followup.send(text, ephemeral=True)
 
 # Сколько последних взаимодействий помнить. Нужно несколько, а не одно:
 # если последнее нажатие открыло форму (модалку), через него сообщение
@@ -61,6 +106,19 @@ class Menu(discord.ui.View):
             return False
         self.remember(interaction)
         return True
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item) -> None:
+        """Необработанная ошибка в кнопке или выпадашке: пишем в лог и коротко
+        сообщаем пользователю, а не оставляем его с «Ошибкой взаимодействия»."""
+        logger.error("Ошибка в меню %s: %r", type(self).__name__, error, exc_info=error)
+        text = f"Что-то пошло не так. {describe_error(error)}"
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(text, ephemeral=True)
+            else:
+                await interaction.response.send_message(text, ephemeral=True)
+        except discord.HTTPException:
+            pass
 
     async def on_timeout(self) -> None:
         my_ids = component_ids(self.children)

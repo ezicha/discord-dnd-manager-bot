@@ -102,3 +102,49 @@ def test_falls_back_to_earlier_interaction():
 def test_menu_without_remembered_interaction_does_nothing():
     menu = run_timeout(lambda menu: None)
     assert not any(item.disabled for item in menu.children)
+
+
+# --- Понятный текст ошибок и начало действия ---
+
+from cogs.menu import describe_error, start_action  # noqa: E402
+
+
+def test_rate_limit_text_says_when_to_retry():
+    text = describe_error(discord.RateLimited(retry_after=400))  # 6,7 минуты
+    assert "2 раз за 10 минут" in text
+    assert "через 7 мин" in text
+
+
+def test_short_rate_limit_rounds_up_to_one_minute():
+    assert "через 1 мин" in describe_error(discord.RateLimited(retry_after=5))
+
+
+def test_other_errors_are_shown_as_is():
+    assert describe_error(ValueError("что-то сломалось")) == "Ошибка: что-то сломалось"
+
+
+def fake_response_interaction(message):
+    calls = []
+
+    async def edit_message(**kwargs):
+        calls.append(("edit_message", kwargs))
+
+    async def defer(**kwargs):
+        calls.append(("defer", kwargs))
+
+    interaction = SimpleNamespace(message=message,
+                                  response=SimpleNamespace(edit_message=edit_message, defer=defer))
+    return interaction, calls
+
+
+def test_start_action_removes_menu_buttons_at_once():
+    interaction, calls = fake_response_interaction(message=object())
+    asyncio.run(start_action(interaction, "Архивирую каналы…"))
+    assert calls == [("edit_message", {"content": "Архивирую каналы…", "view": None})]
+
+
+def test_start_action_without_menu_shows_thinking():
+    # Форма открыта прямо из команды — меню, которое можно заменить, нет.
+    interaction, calls = fake_response_interaction(message=None)
+    asyncio.run(start_action(interaction, "Возвращаю…"))
+    assert calls == [("defer", {"ephemeral": True, "thinking": True})]

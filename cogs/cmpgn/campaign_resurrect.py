@@ -8,9 +8,12 @@ from .campaign_common import (
     build_select_options,
     channel_select_option,
     deliver_result,
+    describe_error,
+    finish_menu,
     logger,
     move_archive_to_end,
     resurrect_channel,
+    start_action,
 )
 from db.campaigns_db import get_campaign_channel_gm_only, get_campaign_id_by_gm_role, resurrect_campaign, unarchive_campaign_channel
 
@@ -139,24 +142,28 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
             self.add_item(field)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
         final_name = self.new_name.value.strip() or self.campaign_name
 
-        # Проверяем конфликты названия, если кампанию переименовывают
+        # Проверяем конфликты названия, если кампанию переименовывают. Это ещё
+        # до начала действия: меню остаётся, можно открыть форму заново.
         if discord.utils.get(guild.categories, name=final_name):
-            await interaction.followup.send(
+            await interaction.response.send_message(
                 f"Категория с названием **{final_name}** уже существует. Попробуй другое название.",
                 ephemeral=True
             )
             return
         existing_role = discord.utils.get(guild.roles, name=final_name)
         if existing_role and (self.campaign_role is None or existing_role.id != self.campaign_role.id):
-            await interaction.followup.send(
+            await interaction.response.send_message(
                 f"Роль с названием **{final_name}** уже занята другой кампанией. Попробуй другое название.",
                 ephemeral=True
             )
             return
+
+        await start_action(interaction, f"Возвращаю кампанию **{final_name}** из архива…")
+        restored = []
+        current = None  # канал, на котором остановились, если что-то пошло не так
 
         try:
             campaign_role = self.campaign_role
@@ -201,9 +208,9 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
                     "Ошибка БД при восстановлении кампании «%s»: %s", final_name, repr(db_error)
                 )
 
-            restored = []
             renamed_from = {}
             for channel in self.channels:
+                current = channel
                 field = self.channel_name_inputs.get(channel.id)
                 new_channel_name = field.value.strip() if field else None
                 old_name = channel.name
@@ -253,7 +260,13 @@ class ResurrectModal(discord.ui.Modal, title="Вернуть кампанию и
             await deliver_result(interaction, restored, message)
         except Exception as e:
             logger.error("Ошибка при восстановлении кампании: %s", repr(e))
-            await interaction.followup.send(
-                f"Что-то пошло не так при восстановлении кампании. Ошибка: {e}",
-                ephemeral=True
+            done_text = ", ".join(ch.mention for ch in restored) or "ни одного"
+            stopped_text = (
+                f"Остановилось на канале {current.mention} — он и следующие остались в архиве.\n"
+                if current is not None and current not in restored else ""
+            )
+            await finish_menu(
+                interaction,
+                f"Что-то пошло не так при восстановлении кампании.\n"
+                f"Каналов успело вернуться: {done_text}\n{stopped_text}{describe_error(e)}",
             )
