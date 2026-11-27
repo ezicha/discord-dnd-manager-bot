@@ -8,6 +8,8 @@ from datetime import timedelta
 
 import discord
 
+from cogs.menu import Menu
+
 from db.events_db import get_event_record, record_event, update_event_announcement
 from .event_common import (
     MAX_DAYS_AHEAD,
@@ -38,7 +40,9 @@ class TitleTimeModal(discord.ui.Modal, title="Название и время с�
         )
         self.time_input = discord.ui.TextInput(
             label="Время (NSK, формат ЧЧ:ММ)", max_length=5, required=True,
-            placeholder="19:00", default=parent_view.time_str or "",
+            placeholder="19:00",
+            # Если прошлый ввод времени не распознался — показываем его, чтобы поправить.
+            default=parent_view.time_draft or parent_view.time_str or "",
         )
         self.description_input = discord.ui.TextInput(
             label="Описание (необязательно)", style=discord.TextStyle.paragraph,
@@ -49,18 +53,27 @@ class TitleTimeModal(discord.ui.Modal, title="Название и время с�
         self.add_item(self.description_input)
 
     async def on_submit(self, interaction: discord.Interaction):
+        # Название и описание сохраняем в любом случае — даже если время
+        # введено с ошибкой, набирать их заново не придётся.
+        self.parent_view.title = str(self.title_input.value)
+        self.parent_view.description = str(self.description_input.value) or None
+        raw_time = str(self.time_input.value).strip()
+
         try:
-            parse_time_input(str(self.time_input.value))
+            parse_time_input(raw_time)
         except ValueError as e:
-            await interaction.response.send_message(str(e), ephemeral=True)
+            self.parent_view.time_draft = raw_time
+            await interaction.response.edit_message(
+                content=f"⚠ Время «{raw_time}» не распознано. {e}. "
+                        f"Нажми «Название и время» ещё раз и поправь — остальное сохранено.",
+                embed=self.parent_view.build_embed(), view=self.parent_view,
+            )
             return
 
-        self.parent_view.title = str(self.title_input.value)
-        self.parent_view.time_str = str(self.time_input.value).strip()
-        self.parent_view.description = str(self.description_input.value) or None
-
+        self.parent_view.time_str = raw_time
+        self.parent_view.time_draft = None
         await interaction.response.edit_message(
-            embed=self.parent_view.build_embed(), view=self.parent_view
+            content=None, embed=self.parent_view.build_embed(), view=self.parent_view
         )
 
 
@@ -220,6 +233,7 @@ class CreateEventButton(discord.ui.Button):
 
         for item in v.children:
             item.disabled = True
+        v.stop()  # меню выполнило своё дело — помечать его «устаревшим» не нужно
         await interaction.response.edit_message(
             content=f"Готово! Событие «{v.title}» создано: {event.url}{announce_note}",
             embed=v.build_embed(), view=v,
@@ -279,6 +293,7 @@ class CreateEventButton(discord.ui.Button):
 
         for item in v.children:
             item.disabled = True
+        v.stop()
         await interaction.response.edit_message(
             content=f"Готово! Событие «{v.title}» обновлено: {updated_event.url}{announce_note}",
             embed=v.build_embed(), view=v,
@@ -296,7 +311,7 @@ class CancelButton(discord.ui.Button):
         self.parent_view.stop()
 
 
-class EventCreateView(discord.ui.View):
+class EventCreateView(Menu):
     # Ряды: 0 — Пн–Пт (5 кнопок), 1 — ◀/Сб/Вс/▶ (4 кнопки),
     # 2..N — селекты каналов (если их больше одного), последний ряд — кнопки действий.
     def __init__(
@@ -316,6 +331,8 @@ class EventCreateView(discord.ui.View):
         self.text_channels = text_channels
         self.requester = requester
         self.existing_event = existing_event
+        # Нераспознанный ввод времени — чтобы при повторном открытии формы его можно было поправить.
+        self.time_draft: str | None = None
 
         if existing_event is not None:
             start_local = existing_event.start_time.astimezone(SERVER_TZ)
@@ -379,7 +396,7 @@ class EventCreateView(discord.ui.View):
         self.add_item(CreateEventButton(self, row=row))
         self.add_item(CancelButton(self, row=row))
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def check_user(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.requester.id:
             await interaction.response.send_message(
                 "Эта форма не для тебя.", ephemeral=True

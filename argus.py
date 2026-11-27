@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import asyncio
 
 import logging
+from cogs.menu import describe_error
 from db.connection import close_db, init_db
 
 load_dotenv()
@@ -48,7 +49,13 @@ intents.members = True
 intents.message_content = True
 intents.presences = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+# Если Discord просит подождать дольше 30 секунд (обычно — лимит на смену
+# названия канала: 2 раза за 10 минут), бот не висит молча до 10 минут,
+# а прерывает действие и сообщает, через сколько можно повторить
+# (см. describe_error в cogs/menu.py).
+MAX_RATELIMIT_WAIT_SECONDS = 30
+
+bot = commands.Bot(command_prefix="!", intents=intents, max_ratelimit_timeout=MAX_RATELIMIT_WAIT_SECONDS)
 
 
 @bot.event
@@ -78,7 +85,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: discord.
         repr(original),
     )
 
-    message = f"Что-то пошло не так. Ошибка: {original}"
+    message = f"Что-то пошло не так. {describe_error(original)}"
     try:
         if interaction.response.is_done():
             await interaction.followup.send(message, ephemeral=True)

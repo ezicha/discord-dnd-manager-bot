@@ -2,6 +2,9 @@ import logging
 logger = logging.getLogger("argus")
 
 import discord
+# Общие для всех меню хелперы — импортируются сюда, чтобы файлы кампаний
+# брали всё нужное из одного места.
+from cogs.menu import describe_error, finish_menu, start_action  # noqa: F401
 from db.campaigns_db import get_gm_archived_campaigns as db_get_gm_archived_campaigns
 from db.campaigns_db import get_gm_campaigns as db_get_gm_campaigns
 
@@ -14,6 +17,26 @@ GM_ROLE_PREFIX = "ГМ: "
 
 def slugify(name: str) -> str:
     return name.lower().replace(" ", "-")
+
+
+def campaign_name_conflict(guild: discord.Guild, name: str) -> str | None:
+    """
+    Проверяет, свободно ли название для новой кампании. Возвращает текст
+    для пользователя, если занято, или None, если можно создавать.
+
+    Бот во многих местах находит кампанию по названию (категория «X», роль
+    «X», роль «ГМ: X»), поэтому совпадение с ЛЮБОЙ категорией или ролью
+    сервера приведёт к путанице — запрещаем его заранее.
+    """
+    if not name:
+        return "Название кампании не может быть пустым."
+    if discord.utils.get(guild.categories, name=name):
+        return f"На сервере уже есть категория «{name}». Выбери другое название кампании."
+    if discord.utils.get(guild.roles, name=name):
+        return f"На сервере уже есть роль «{name}». Выбери другое название кампании."
+    if discord.utils.get(guild.roles, name=f"{GM_ROLE_PREFIX}{name}"):
+        return f"На сервере уже есть роль «{GM_ROLE_PREFIX}{name}». Выбери другое название кампании."
+    return None
 
 
 def channel_select_option(ch: discord.abc.GuildChannel) -> discord.SelectOption:
@@ -109,6 +132,17 @@ def build_access_overwrites(
     return overwrites
 
 
+def infer_gm_only(channel, player_role_id: int) -> bool | None:
+    """Определяет по правам канала, «только ГМ пишет/говорит» ли он: так бот
+    выставляет права в build_access_overwrites — роли игроков запрещено писать
+    (а в голосовом — подключаться). None — если роли игроков нет и понять нельзя."""
+    role = channel.guild.get_role(player_role_id)
+    if role is None:
+        return None
+    overwrite = channel.overwrites_for(role)
+    return overwrite.send_messages is False or overwrite.connect is False
+
+
 async def get_or_create_archive_category(guild: discord.Guild) -> discord.CategoryChannel:
     """
     Возвращает категорию "Архив", создавая её при необходимости,
@@ -136,12 +170,15 @@ async def archive_channel(guild, channel, archive_category, prefix, campaign_rol
     """
     Переносит один канал в архивную категорию, переименовывает с префиксом
     и выставляет права "только просмотр" (без записи, без подключения для голоса).
+
+    Всё — одним запросом к Discord: на изменения каналов у Discord жёсткие
+    лимиты (название — не больше 2 раз за 10 минут), лишние запросы
+    приближают их.
     """
     is_voice = isinstance(channel, discord.VoiceChannel)
     new_name = f"{prefix}-{channel.name}"
-    await channel.edit(category=archive_category, name=new_name, sync_permissions=False)
 
-    overwrites = channel.overwrites
+    overwrites = dict(channel.overwrites)
     overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
     if campaign_role:
         overwrites[campaign_role] = discord.PermissionOverwrite(
@@ -151,7 +188,9 @@ async def archive_channel(guild, channel, archive_category, prefix, campaign_rol
         overwrites[gm_role] = discord.PermissionOverwrite(
             view_channel=True, send_messages=False, connect=(False if is_voice else None)
         )
-    await channel.edit(overwrites=overwrites)
+    await channel.edit(
+        category=archive_category, name=new_name, overwrites=overwrites, sync_permissions=False
+    )
     return channel
 
 async def resurrect_channel(guild, channel, category, campaign_role, gm_role, new_name: str | None = None, gm_only: bool = False):
@@ -187,23 +226,20 @@ async def deliver_result(interaction: discord.Interaction, channels: list, messa
     Отправляет итоговое сообщение о выполнении команды не в канал вызова команды,
     а в затронутые текстовые каналы — в каждый из них, если их несколько
     (голосовые каналы из списка просто игнорируются, в них нельзя писать текстом).
-    Взаимодействие при этом закрывается коротким приватным (ephemeral) подтверждением,
-    чтобы у вызвавшего не осталось висящего "бот думает...".
+    Вызвавшему показывается короткое подтверждение short_ack — на месте меню,
+    из которого запущено действие (кнопки меню при этом убираются, чтобы
+    действие нельзя было случайно повторить).
 
     Если среди channels не нашлось ни одного текстового канала (например, у кампании
-    есть только голосовой канал) — само итоговое сообщение уходит вызвавшему как
-    ephemeral-ответ, короткое подтверждение в этом случае не отправляется.
+    есть только голосовой канал) — вызвавшему вместо short_ack показывается
+    само итоговое сообщение.
 
-    Перед вызовом взаимодействие должно быть подтверждено через
-    interaction.response.defer(ephemeral=True).
+    Перед вызовом взаимодействие должно быть подтверждено (start_action, defer или edit_message).
     """
     text_channels = [ch for ch in channels if isinstance(ch, discord.TextChannel)]
-    if text_channels:
-        for ch in text_channels:
-            await ch.send(message)
-        await interaction.followup.send(short_ack, ephemeral=True)
-    else:
-        await interaction.followup.send(message, ephemeral=True)
+    for ch in text_channels:
+        await ch.send(message)
+    await finish_menu(interaction, short_ack if text_channels else message)
 
 
 def get_gm_campaigns(guild: discord.Guild, member: discord.Member) -> dict:

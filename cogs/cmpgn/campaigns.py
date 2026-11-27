@@ -5,6 +5,8 @@ from .campaign_archive import ArchiveSelectView
 from .campaign_common import (
     ARCHIVE_CATEGORY_NAME,
     GM_ROLE_PREFIX,
+    describe_error,
+    infer_gm_only,
     logger,
     resolve_gm_archived_campaigns_from_db,
     resolve_gm_campaigns_from_db,
@@ -46,7 +48,7 @@ class CampaignGroup(discord.app_commands.Group):
         except Exception as e:
             logger.error("Ошибка при открытии формы /campaign create: %s", repr(e))
             if not interaction.response.is_done():
-                await interaction.response.send_message(f"Не удалось открыть форму. Ошибка: {e}", ephemeral=True)
+                await interaction.response.send_message(f"Не удалось открыть форму. {describe_error(e)}", ephemeral=True)
 
     @discord.app_commands.command(name="archive", description="Архивировать одну из своих кампаний (только для ГМа)")
     async def archive(self, interaction: discord.Interaction):
@@ -66,10 +68,11 @@ class CampaignGroup(discord.app_commands.Group):
             await interaction.response.send_message(
                 "Выбери кампанию для архивирования:", view=view, ephemeral=True
             )
+            view.remember(interaction)
         except Exception as e:
             logger.error("Ошибка в /campaign archive: %s", repr(e))
             if not interaction.response.is_done():
-                await interaction.response.send_message(f"Что-то пошло не так. Ошибка: {e}", ephemeral=True)
+                await interaction.response.send_message(f"Что-то пошло не так. {describe_error(e)}", ephemeral=True)
 
     @discord.app_commands.command(name="edit", description="Редактировать одну из своих кампаний (только для ГМа)")
     async def edit(self, interaction: discord.Interaction):
@@ -89,13 +92,15 @@ class CampaignGroup(discord.app_commands.Group):
                 name, (category, campaign_role, gm_role) = next(iter(campaigns.items()))
                 menu = CampaignEditMenuView(name, category, campaign_role, gm_role)
                 await interaction.response.send_message(f"Редактирование кампании **{name}**:", view=menu, ephemeral=True)
+                menu.remember(interaction)
             else:
                 view = CampaignEditSelectView(campaigns)
                 await interaction.response.send_message("Какую кампанию редактировать?", view=view, ephemeral=True)
+                view.remember(interaction)
         except Exception as e:
             logger.error("Ошибка в /campaign edit: %s", repr(e))
             if not interaction.response.is_done():
-                await interaction.response.send_message(f"Что-то пошло не так. Ошибка: {e}", ephemeral=True)
+                await interaction.response.send_message(f"Что-то пошло не так. {describe_error(e)}", ephemeral=True)
 
     @discord.app_commands.command(name="resurrect", description="Вернуть заархивированную кампанию из архива (только для ГМа)")
     async def resurrect(self, interaction: discord.Interaction):
@@ -123,6 +128,7 @@ class CampaignGroup(discord.app_commands.Group):
                         f"Восстановлены при этом будут все каналы, независимо от выбора здесь.",
                         view=view, ephemeral=True
                     )
+                    view.remember(interaction)
                 else:
                     modal = ResurrectModal(name, campaign_role, gm_role, channels)
                     await interaction.response.send_modal(modal)
@@ -131,10 +137,11 @@ class CampaignGroup(discord.app_commands.Group):
                 await interaction.response.send_message(
                     "Какую кампанию вернуть из архива?", view=view, ephemeral=True
                 )
+                view.remember(interaction)
         except Exception as e:
             logger.error("Ошибка в /campaign resurrect: %s", repr(e))
             if not interaction.response.is_done():
-                await interaction.response.send_message(f"Что-то пошло не так. Ошибка: {e}", ephemeral=True)
+                await interaction.response.send_message(f"Что-то пошло не так. {describe_error(e)}", ephemeral=True)
 
 
 def describe_channel(channel) -> str:
@@ -281,17 +288,6 @@ async def register_unknown_campaigns(bot: commands.Bot) -> int:
 def channel_type_of(channel) -> str:
     """Тип канала в том виде, в каком он хранится в БД."""
     return "voice" if isinstance(channel, (discord.VoiceChannel, discord.StageChannel)) else "text"
-
-
-def infer_gm_only(channel, player_role_id: int) -> bool | None:
-    """Определяет по правам канала, «только ГМ пишет/говорит» ли он: так бот
-    выставляет права в build_access_overwrites — роли игроков запрещено писать
-    (а в голосовом — подключаться). None — если роли игроков нет и понять нельзя."""
-    role = channel.guild.get_role(player_role_id)
-    if role is None:
-        return None
-    overwrite = channel.overwrites_for(role)
-    return overwrite.send_messages is False or overwrite.connect is False
 
 
 async def handle_channel_created(channel) -> bool:
