@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import asyncio
 
 import logging
-from db.connection import init_db
+from db.connection import close_db, init_db
 
 logging.basicConfig(
     level=logging.INFO, # DEBUG, INFO, WARNING, ERROR
@@ -63,14 +63,20 @@ async def on_app_command_error(interaction: discord.Interaction, error: discord.
         pass
 
 async def main():
-    async with bot:
-        await init_db()
-        await bot.load_extension("cogs.cmpgn.campaigns")
-        await bot.load_extension("cogs.events.events")
-        await bot.load_extension("cogs.dice")
-        await bot.load_extension("cogs.housekeeping")
-        await bot.load_extension("cogs.campaign_devtool")
-        await bot.load_extension("cogs.threads")
-        await bot.start(TOKEN)
+    try:
+        async with bot:
+            await init_db()
+            await bot.load_extension("cogs.cmpgn.campaigns")
+            await bot.load_extension("cogs.events.events")
+            await bot.load_extension("cogs.dice")
+            await bot.load_extension("cogs.housekeeping")
+            await bot.load_extension("cogs.campaign_devtool")
+            await bot.load_extension("cogs.threads")
+            await bot.start(TOKEN)
+    finally:
+        # Сначала бот отключается от Discord (выход из async with bot),
+        # потом закрывается база — когда её уже никто не использует.
+        await close_db()
+        logger.info("Соединение с базой закрыто")
 
 asyncio.run(main())
