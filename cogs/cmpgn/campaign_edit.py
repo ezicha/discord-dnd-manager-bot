@@ -247,7 +247,7 @@ class AddChannelTypeView(discord.ui.View):
     @discord.ui.select(
         placeholder="Тип канала",
         options=[
-            discord.SelectOption(label="Текстовый", value="text"),
+            discord.SelectOption(label="Текстовый", value="text", default=True),
             discord.SelectOption(label="Голосовой", value="voice"),
         ]
     )
@@ -258,7 +258,7 @@ class AddChannelTypeView(discord.ui.View):
     @discord.ui.select(
         placeholder="Кто может писать",
         options=[
-            discord.SelectOption(label="Все участники кампании", value="all"),
+            discord.SelectOption(label="Все участники кампании", value="all", default=True),
             discord.SelectOption(label="Только ГМ (остальные — только просмотр)", value="gm_only"),
         ]
     )
