@@ -53,6 +53,22 @@ class EventGroup(app_commands.Group):
                 return
 
             campaign_id = await get_campaign_id_for_channel(interaction.channel)
+            if campaign_id is None:
+                # Кампании нет в БД — событие не к чему привязать. Отказываем
+                # заранее, пока в Discord ещё ничего не создано. Сверка кампаний
+                # сама запишет такую кампанию в БД при следующем проходе.
+                logger.warning(
+                    "/event create: кампания «%s» (категория id %s) не найдена в БД",
+                    campaign_name, interaction.channel.category_id,
+                )
+                await interaction.response.send_message(
+                    f"Кампания «{campaign_name}» не записана в базе бота, поэтому создать событие "
+                    "пока нельзя. Бот записывает такие кампании сам при запуске и раз в неделю — "
+                    "если ошибка повторяется, напиши администратору бота.",
+                    ephemeral=True,
+                )
+                return
+
             view = EventCreateView(campaign_name, campaign_id, voice_channels, text_channels, interaction.user)
             embed = build_event_preview_embed(
                 campaign_name, None, None, None,
