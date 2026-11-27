@@ -1,4 +1,4 @@
-from db.connection import get_connection
+from db.connection import get_connection, transaction
 
 
 async def record_event(
@@ -11,16 +11,15 @@ async def record_event(
     """Записывает новое событие — вызывается сразу после создания
     Discord Scheduled Event через /event create.
     """
-    db = await get_connection()
-    await db.execute(
-        """
-        INSERT INTO event_announcements
-            (scheduled_event_id, campaign_id, creator_id, announcement_channel_id, announcement_message_id)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (scheduled_event_id, campaign_id, creator_id, announcement_channel_id, announcement_message_id),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            """
+            INSERT INTO event_announcements
+                (scheduled_event_id, campaign_id, creator_id, announcement_channel_id, announcement_message_id)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (scheduled_event_id, campaign_id, creator_id, announcement_channel_id, announcement_message_id),
+        )
 
 
 async def get_event_record(scheduled_event_id: int):
@@ -46,28 +45,26 @@ async def update_event_announcement(
     менялся, вызывающий код просто не трогает эту функцию — редактируется то
     же самое сообщение, в БД менять нечего.
     """
-    db = await get_connection()
-    await db.execute(
-        """
-        UPDATE event_announcements
-        SET announcement_channel_id = ?, announcement_message_id = ?
-        WHERE scheduled_event_id = ?
-        """,
-        (announcement_channel_id, announcement_message_id, scheduled_event_id),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            """
+            UPDATE event_announcements
+            SET announcement_channel_id = ?, announcement_message_id = ?
+            WHERE scheduled_event_id = ?
+            """,
+            (announcement_channel_id, announcement_message_id, scheduled_event_id),
+        )
 
 
 async def delete_event_record(scheduled_event_id: int) -> None:
     """Удаляет запись события — вызывается из /event cancel и из
     периодической автоочистки мёртвых записей.
     """
-    db = await get_connection()
-    await db.execute(
-        "DELETE FROM event_announcements WHERE scheduled_event_id = ?",
-        (scheduled_event_id,),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            "DELETE FROM event_announcements WHERE scheduled_event_id = ?",
+            (scheduled_event_id,),
+        )
 
 
 async def get_all_event_records() -> list[dict]:

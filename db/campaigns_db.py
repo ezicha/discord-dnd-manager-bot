@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from db.connection import get_connection
+from db.connection import get_connection, transaction
 
 
 async def create_campaign(
@@ -16,28 +16,27 @@ async def create_campaign(
     actor_id — Discord ID того, кто создал кампанию (для campaign_history).
     Возвращает id созданной записи в campaigns.
     """
-    db = await get_connection()
-    now = datetime.now(timezone.utc).isoformat()
+    async with transaction() as db:
+        now = datetime.now(timezone.utc).isoformat()
 
-    cursor = await db.execute(
-        """
-        INSERT INTO campaigns (guild_id, name, gm_role_id, player_role_id, category_id, status, created_at)
-        VALUES (?, ?, ?, ?, ?, 'active', ?)
-        """,
-        (guild_id, name, gm_role_id, player_role_id, category_id, now),
-    )
-    campaign_id = cursor.lastrowid
+        cursor = await db.execute(
+            """
+            INSERT INTO campaigns (guild_id, name, gm_role_id, player_role_id, category_id, status, created_at)
+            VALUES (?, ?, ?, ?, ?, 'active', ?)
+            """,
+            (guild_id, name, gm_role_id, player_role_id, category_id, now),
+        )
+        campaign_id = cursor.lastrowid
 
-    await db.execute(
-        """
-        INSERT INTO campaign_history (campaign_id, action, actor_id, created_at)
-        VALUES (?, 'created', ?, ?)
-        """,
-        (campaign_id, actor_id, now),
-    )
+        await db.execute(
+            """
+            INSERT INTO campaign_history (campaign_id, action, actor_id, created_at)
+            VALUES (?, 'created', ?, ?)
+            """,
+            (campaign_id, actor_id, now),
+        )
 
-    await db.commit()
-    return campaign_id
+        return campaign_id
 
 
 async def get_campaign_id_by_category(category_id: int) -> int | None:
@@ -100,36 +99,34 @@ async def archive_campaign(campaign_id: int, actor_id: int) -> None:
     """Помечает кампанию и все её каналы как заархивированные, обнуляет category_id
     (категория удаляется в Discord при архивации) и пишет строку 'archived' в историю.
     """
-    db = await get_connection()
-    now = datetime.now(timezone.utc).isoformat()
+    async with transaction() as db:
+        now = datetime.now(timezone.utc).isoformat()
 
-    await db.execute(
-        """
-        UPDATE campaigns
-        SET status = 'archived', category_id = NULL
-        WHERE id = ?
-        """,
-        (campaign_id,),
-    )
+        await db.execute(
+            """
+            UPDATE campaigns
+            SET status = 'archived', category_id = NULL
+            WHERE id = ?
+            """,
+            (campaign_id,),
+        )
 
-    await db.execute(
-        """
-        UPDATE campaign_channels
-        SET status = 'archived'
-        WHERE campaign_id = ?
-        """,
-        (campaign_id,),
-    )
+        await db.execute(
+            """
+            UPDATE campaign_channels
+            SET status = 'archived'
+            WHERE campaign_id = ?
+            """,
+            (campaign_id,),
+        )
 
-    await db.execute(
-        """
-        INSERT INTO campaign_history (campaign_id, action, actor_id, created_at)
-        VALUES (?, 'archived', ?, ?)
-        """,
-        (campaign_id, actor_id, now),
-    )
-
-    await db.commit()
+        await db.execute(
+            """
+            INSERT INTO campaign_history (campaign_id, action, actor_id, created_at)
+            VALUES (?, 'archived', ?, ?)
+            """,
+            (campaign_id, actor_id, now),
+        )
 
 
 async def resurrect_campaign(campaign_id: int, category_id: int, actor_id: int) -> None:
@@ -137,36 +134,34 @@ async def resurrect_campaign(campaign_id: int, category_id: int, actor_id: int) 
     категорию (создаётся заново в Discord при resurrect) и пишет строку
     'resurrected' в историю.
     """
-    db = await get_connection()
-    now = datetime.now(timezone.utc).isoformat()
+    async with transaction() as db:
+        now = datetime.now(timezone.utc).isoformat()
 
-    await db.execute(
-        """
-        UPDATE campaigns
-        SET status = 'active', category_id = ?
-        WHERE id = ?
-        """,
-        (category_id, campaign_id),
-    )
+        await db.execute(
+            """
+            UPDATE campaigns
+            SET status = 'active', category_id = ?
+            WHERE id = ?
+            """,
+            (category_id, campaign_id),
+        )
 
-    await db.execute(
-        """
-        UPDATE campaign_channels
-        SET status = 'active'
-        WHERE campaign_id = ?
-        """,
-        (campaign_id,),
-    )
+        await db.execute(
+            """
+            UPDATE campaign_channels
+            SET status = 'active'
+            WHERE campaign_id = ?
+            """,
+            (campaign_id,),
+        )
 
-    await db.execute(
-        """
-        INSERT INTO campaign_history (campaign_id, action, actor_id, created_at)
-        VALUES (?, 'resurrected', ?, ?)
-        """,
-        (campaign_id, actor_id, now),
-    )
-
-    await db.commit()
+        await db.execute(
+            """
+            INSERT INTO campaign_history (campaign_id, action, actor_id, created_at)
+            VALUES (?, 'resurrected', ?, ?)
+            """,
+            (campaign_id, actor_id, now),
+        )
 
 
 async def get_campaign_channel_gm_only(discord_channel_id: int) -> bool | None:
@@ -198,13 +193,12 @@ gm_only: bool = False,
     тогда новую строку не добавляем, а только выставляем gm_only, выбранный
     в команде: он точнее, чем угаданный по правам канала.
     """
-    db = await get_connection()
-    await _insert_channel_if_missing(db, campaign_id, discord_channel_id, channel_type, gm_only)
-    await db.execute(
-        "UPDATE campaign_channels SET gm_only = ? WHERE discord_channel_id = ?",
-        (int(gm_only), discord_channel_id),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await _insert_channel_if_missing(db, campaign_id, discord_channel_id, channel_type, gm_only)
+        await db.execute(
+            "UPDATE campaign_channels SET gm_only = ? WHERE discord_channel_id = ?",
+            (int(gm_only), discord_channel_id),
+        )
 
 
 async def _insert_channel_if_missing(db, campaign_id, discord_channel_id, channel_type, gm_only) -> bool:
@@ -229,21 +223,19 @@ async def adopt_campaign_channel(
 ) -> bool:
     """Записывает в БД канал, созданный в категории кампании вручную (мимо бота).
     Если канал уже известен — ничего не делает. True — если канал добавлен."""
-    db = await get_connection()
-    inserted = await _insert_channel_if_missing(db, campaign_id, discord_channel_id, channel_type, gm_only)
-    await db.commit()
-    return inserted
+    async with transaction() as db:
+        inserted = await _insert_channel_if_missing(db, campaign_id, discord_channel_id, channel_type, gm_only)
+        return inserted
 
 
 async def move_campaign_channel(discord_channel_id: int, new_campaign_id: int) -> None:
     """Перепривязывает канал к другой кампании — когда его вручную перенесли
     в категорию другой активной кампании."""
-    db = await get_connection()
-    await db.execute(
-        "UPDATE campaign_channels SET campaign_id = ?, status = 'active' WHERE discord_channel_id = ?",
-        (new_campaign_id, discord_channel_id),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            "UPDATE campaign_channels SET campaign_id = ?, status = 'active' WHERE discord_channel_id = ?",
+            (new_campaign_id, discord_channel_id),
+        )
 
 
 async def get_active_campaign_by_category(category_id: int) -> dict | None:
@@ -261,12 +253,11 @@ async def get_active_campaign_by_category(category_id: int) -> dict | None:
 
 async def archive_campaign_channel(discord_channel_id: int) -> None:
     """Архивирует один конкретный канал, не трогая остальные каналы кампании."""
-    db = await get_connection()
-    await db.execute(
-        "UPDATE campaign_channels SET status = 'archived' WHERE discord_channel_id = ?",
-        (discord_channel_id,),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            "UPDATE campaign_channels SET status = 'archived' WHERE discord_channel_id = ?",
+            (discord_channel_id,),
+        )
 
 
 async def unarchive_campaign_channel(discord_channel_id: int) -> None:
@@ -276,12 +267,11 @@ async def unarchive_campaign_channel(discord_channel_id: int) -> None:
     решение о том, разрешено ли восстановление (кампания должна быть
     active, а не archived целиком), остаётся на стороне вызывающего кода.
     """
-    db = await get_connection()
-    await db.execute(
-        "UPDATE campaign_channels SET status = 'active' WHERE discord_channel_id = ?",
-        (discord_channel_id,),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            "UPDATE campaign_channels SET status = 'active' WHERE discord_channel_id = ?",
+            (discord_channel_id,),
+        )
 
 
 async def remove_deleted_channel(discord_channel_id: int, actor_id: int) -> None:
@@ -296,36 +286,33 @@ async def remove_deleted_channel(discord_channel_id: int, actor_id: int) -> None
     Активная кампания считается удалённой только когда удалена её
     категория — это решает автоочистка через wipe_campaign.
     """
-    db = await get_connection()
+    async with transaction() as db:
+        cursor = await db.execute(
+            "SELECT campaign_id FROM campaign_channels WHERE discord_channel_id = ?",
+            (discord_channel_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            # Канал не был известен БД (например, создан ещё до перехода на БД) — нечего чистить.
+            return
+        campaign_id = row["campaign_id"]
 
-    cursor = await db.execute(
-        "SELECT campaign_id FROM campaign_channels WHERE discord_channel_id = ?",
-        (discord_channel_id,),
-    )
-    row = await cursor.fetchone()
-    if row is None:
-        # Канал не был известен БД (например, создан ещё до перехода на БД) — нечего чистить.
-        return
-    campaign_id = row["campaign_id"]
+        await db.execute(
+            "DELETE FROM campaign_channels WHERE discord_channel_id = ?",
+            (discord_channel_id,),
+        )
 
-    await db.execute(
-        "DELETE FROM campaign_channels WHERE discord_channel_id = ?",
-        (discord_channel_id,),
-    )
+        cursor = await db.execute(
+            "SELECT COUNT(*) AS cnt FROM campaign_channels WHERE campaign_id = ?",
+            (campaign_id,),
+        )
+        remaining = (await cursor.fetchone())["cnt"]
 
-    cursor = await db.execute(
-        "SELECT COUNT(*) AS cnt FROM campaign_channels WHERE campaign_id = ?",
-        (campaign_id,),
-    )
-    remaining = (await cursor.fetchone())["cnt"]
-
-    if remaining == 0:
-        cursor = await db.execute("SELECT status FROM campaigns WHERE id = ?", (campaign_id,))
-        campaign = await cursor.fetchone()
-        if campaign is not None and campaign["status"] == "archived":
-            await _wipe_campaign_rows(db, campaign_id, actor_id)
-
-    await db.commit()
+        if remaining == 0:
+            cursor = await db.execute("SELECT status FROM campaigns WHERE id = ?", (campaign_id,))
+            campaign = await cursor.fetchone()
+            if campaign is not None and campaign["status"] == "archived":
+                await _wipe_campaign_rows(db, campaign_id, actor_id)
 
 
 async def _wipe_campaign_rows(db, campaign_id: int, actor_id: int) -> None:
@@ -349,9 +336,8 @@ async def _wipe_campaign_rows(db, campaign_id: int, actor_id: int) -> None:
 async def wipe_campaign(campaign_id: int, actor_id: int) -> None:
     """Стирает кампанию из БД — для автоочистки, когда категорию активной
     кампании удалили в Discord мимо бота. В самом Discord ничего не трогает."""
-    db = await get_connection()
-    await _wipe_campaign_rows(db, campaign_id, actor_id)
-    await db.commit()
+    async with transaction() as db:
+        await _wipe_campaign_rows(db, campaign_id, actor_id)
 
 
 async def get_active_campaigns_with_category() -> list[dict]:
@@ -372,12 +358,11 @@ async def set_campaign_channel_gm_only(discord_channel_id: int, gm_only: bool) -
     """Обновляет флаг gm_only у канала — используется в /campaign edit → «Изменить
     доступ», когда меняют, кто может писать в уже существующем канале кампании.
     """
-    db = await get_connection()
-    await db.execute(
-        "UPDATE campaign_channels SET gm_only = ? WHERE discord_channel_id = ?",
-        (int(gm_only), discord_channel_id),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            "UPDATE campaign_channels SET gm_only = ? WHERE discord_channel_id = ?",
+            (int(gm_only), discord_channel_id),
+        )
 
 
 async def get_all_campaign_channels():
@@ -431,15 +416,14 @@ async def delete_orphaned_campaign_history(campaign_ids: list[int]) -> int:
     """
     if not campaign_ids:
         return 0
-    db = await get_connection()
-    placeholders = ",".join("?" for _ in campaign_ids)
-    cursor = await db.execute(
-        f"""
-        DELETE FROM campaign_history
-        WHERE campaign_id IN ({placeholders})
-          AND campaign_id NOT IN (SELECT id FROM campaigns)
-        """,
-        campaign_ids,
-    )
-    await db.commit()
-    return cursor.rowcount
+    async with transaction() as db:
+        placeholders = ",".join("?" for _ in campaign_ids)
+        cursor = await db.execute(
+            f"""
+            DELETE FROM campaign_history
+            WHERE campaign_id IN ({placeholders})
+              AND campaign_id NOT IN (SELECT id FROM campaigns)
+            """,
+            campaign_ids,
+        )
+        return cursor.rowcount
