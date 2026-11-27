@@ -7,13 +7,40 @@ import asyncio
 import logging
 from db.connection import init_db
 
+load_dotenv()
+
+
+def _log_level_from_env(name: str, default: int) -> tuple[int, str | None]:
+    """Уровень логов из переменной окружения (DEBUG, INFO, WARNING, ERROR).
+    Не задана — default. Не распознана — default и текст предупреждения."""
+    raw = os.getenv(name, "").strip().upper()
+    if not raw:
+        return default, None
+    level = logging.getLevelNamesMapping().get(raw)
+    if level is None:
+        return default, f"{name}={raw!r} не распознан, использую {logging.getLevelName(default)}"
+    return level, None
+
+
+# LOG_LEVEL — общий уровень (включая discord.py), ARGUS_LOG_LEVEL — только код бота.
+# На боевом сервере не заданы: всё работает на INFO.
+root_level, root_warning = _log_level_from_env("LOG_LEVEL", logging.INFO)
+argus_level, argus_warning = _log_level_from_env("ARGUS_LOG_LEVEL", root_level)
+
 logging.basicConfig(
-    level=logging.INFO, # DEBUG, INFO, WARNING, ERROR
+    level=root_level,
     format="%(asctime)s %(levelname)s:%(name)s:%(message)s"
 )
 logger = logging.getLogger("argus")
+logger.setLevel(argus_level)
+for warning in (root_warning, argus_warning):
+    if warning:
+        logger.warning(warning)
+logger.info(
+    "Уровень логов: общий %s, Аргус %s",
+    logging.getLevelName(root_level), logging.getLevelName(argus_level),
+)
 
-load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 intents = discord.Intents.default()
