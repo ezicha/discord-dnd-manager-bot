@@ -2,7 +2,13 @@ import discord
 from discord.ext import commands, tasks
 
 from .campaign_archive import ArchiveSelectView
-from .campaign_common import logger, resolve_gm_archived_campaigns_from_db, resolve_gm_campaigns_from_db
+from .campaign_common import (
+    ARCHIVE_CATEGORY_NAME,
+    GM_ROLE_PREFIX,
+    logger,
+    resolve_gm_archived_campaigns_from_db,
+    resolve_gm_campaigns_from_db,
+)
 from .campaign_create import CampaignModal
 from .campaign_edit import CampaignEditMenuView, CampaignEditSelectView
 from .campaign_resurrect import MAX_CHANNELS_FOR_RENAME, ResurrectChannelPickView, ResurrectModal, ResurrectSelectView
@@ -11,8 +17,10 @@ from db.campaigns_db import (
     adopt_campaign_channel,
     get_active_campaign_by_category,
     get_active_campaigns_with_category,
+    get_all_campaign_category_ids,
     get_all_campaign_channels,
     move_campaign_channel,
+    register_existing_campaign,
     remove_deleted_channel,
     set_campaign_channel_gm_only,
     wipe_campaign,
@@ -187,6 +195,89 @@ async def cleanup_deleted_categories(bot: commands.Bot) -> int:
     return wiped
 
 
+def match_campaign_category(category) -> tuple | None:
+    """Похожа ли категория на кампанию, созданную ботом. Узнаём не только по
+    названиям, но и по правам доступа — бот всегда выставляет их одинаково
+    (см. campaign_create.py):
+      - @everyone категорию не видит;
+      - роль «X» (X — название категории) видит;
+      - роль «ГМ: X» видит и может управлять каналами.
+    Возвращает (роль игроков, роль ГМа) или None, если категория не подходит.
+    """
+    if category.name == ARCHIVE_CATEGORY_NAME:
+        return None
+
+    overwrites = category.overwrites
+    everyone = overwrites.get(category.guild.default_role)
+    if everyone is None or everyone.view_channel is not False:
+        return None
+
+    player_role = gm_role = None
+    for target, overwrite in overwrites.items():
+        if isinstance(target, (discord.Member, discord.User)):
+            continue  # права, выданные отдельным людям, а не ролям
+        target_name = getattr(target, "name", None)
+        if target_name == f"{GM_ROLE_PREFIX}{category.name}":
+            if overwrite.view_channel is True and overwrite.manage_channels is True:
+                gm_role = target
+        elif target_name == category.name:
+            if overwrite.view_channel is True:
+                player_role = target
+
+    if player_role is None or gm_role is None:
+        return None
+    return player_role, gm_role
+
+
+async def register_unknown_campaigns(bot: commands.Bot) -> int:
+    """Находит в Discord кампании, о которых БД не знает (созданы до перехода
+    на БД или запись потерялась), и записывает их вместе с каналами.
+    В самом Discord ничего не меняет. Возвращает, сколько кампаний записано."""
+    known_categories = await get_all_campaign_category_ids()
+    registered = 0
+
+    for guild in bot.guilds:
+        if guild.unavailable:
+            continue
+        for category in guild.categories:
+            if category.id in known_categories:
+                continue
+            match = match_campaign_category(category)
+            if match is None:
+                continue
+            player_role, gm_role = match
+
+            channels = [
+                (ch.id, channel_type_of(ch), bool(infer_gm_only(ch, player_role.id)))
+                for ch in category.channels
+            ]
+            campaign_id = await register_existing_campaign(
+                guild_id=guild.id,
+                name=category.name,
+                gm_role_id=gm_role.id,
+                player_role_id=player_role.id,
+                category_id=category.id,
+                channels=channels,
+                actor_id=bot.user.id,
+            )
+            if campaign_id is None:
+                logger.warning(
+                    "Сверка: категория %s похожа на кампанию, но её роль ГМа уже записана "
+                    "в БД за другой кампанией — не записываю, нужна ручная проверка",
+                    describe_channel(category),
+                )
+                continue
+
+            logger.info(
+                "Сверка: кампания «%s» (категория id %s), которой не было в БД, записана "
+                "вместе с каналами (%d шт.)",
+                category.name, category.id, len(channels),
+            )
+            registered += 1
+
+    return registered
+
+
 def channel_type_of(channel) -> str:
     """Тип канала в том виде, в каком он хранится в БД."""
     return "voice" if isinstance(channel, (discord.VoiceChannel, discord.StageChannel)) else "text"
@@ -318,17 +409,20 @@ class Campaigns(commands.Cog):
     async def cleanup_stale_campaign_channels(self) -> None:
         try:
             # 1) кампании с удалённой категорией (их каналы уйдут вместе с ними);
-            # 2) каналы, созданные или перенесённые вручную;
-            # 3) отдельные удалённые каналы.
+            # 2) кампании, которых нет в БД (созданы до перехода на БД);
+            # 3) каналы, созданные или перенесённые вручную;
+            # 4) отдельные удалённые каналы.
             wiped = await cleanup_deleted_categories(self.bot)
+            registered = await register_unknown_campaigns(self.bot)
             adopted, moved, gm_updated = await adopt_manual_channels(self.bot)
             removed = await cleanup_campaign_channels(self.bot)
             # Итог пишется всегда — даже если ничего не нашлось, чтобы по логам
             # было видно, что сверка вообще прошла.
             logger.info(
-                "Сверка кампаний завершена: стёрто кампаний — %d, записано новых каналов — %d, "
-                "перепривязано — %d, обновлён режим «только ГМ» — %d, убрано удалённых каналов — %d",
-                wiped, adopted, moved, gm_updated, removed,
+                "Сверка кампаний завершена: стёрто кампаний — %d, записано кампаний — %d, "
+                "записано новых каналов — %d, перепривязано — %d, обновлён режим «только ГМ» — %d, "
+                "убрано удалённых каналов — %d",
+                wiped, registered, adopted, moved, gm_updated, removed,
             )
         except Exception:
             logger.exception("Очистка campaign_channels: непредвиденная ошибка")

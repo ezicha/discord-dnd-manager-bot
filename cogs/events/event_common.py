@@ -40,23 +40,50 @@ async def remove_event_announcement_and_record(guild: discord.Guild, event_id: i
     """
     record = await get_event_record(event_id)
     if record is None:
+        # Обычная ситуация при /event cancel: сначала запись убирает сама
+        # команда, потом Discord присылает «событие удалено» — и здесь уже пусто.
+        # Но если анонс остался висеть, причина — именно отсутствие записи.
+        logger.debug("Событие %s: записи в БД нет — анонс удалять не по чему", event_id)
         return False
 
     channel_id = record["announcement_channel_id"]
     message_id = record["announcement_message_id"]
     if channel_id and message_id:
         channel = guild.get_channel(channel_id)
-        if channel is not None:
+        if channel is None:
+            logger.warning(
+                "Событие %s: канал анонса (id %s) не найден — анонс не удалён", event_id, channel_id
+            )
+        else:
             try:
                 message = await channel.fetch_message(message_id)
                 await message.delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass  # анонс уже удалён руками или нет прав — не страшно
+            except discord.NotFound:
+                logger.info("Событие %s: анонс уже был удалён вручную", event_id)
+            except discord.Forbidden:
+                logger.warning(
+                    "Событие %s: у бота нет прав удалить анонс в канале «%s»", event_id, channel.name
+                )
             except discord.HTTPException as e:
                 logger.warning("Не удалось удалить анонс события %s: %r", event_id, e)
 
     await delete_event_record(event_id)
     return True
+
+
+async def rollback_created_event(event, announce_message) -> None:
+    """Откат неудавшегося /event create: удаляет уже отправленный анонс
+    и уже созданное событие в Discord. Ошибки при откате только пишутся
+    в лог — пользователю в любом случае сообщат, что создать не вышло."""
+    if announce_message is not None:
+        try:
+            await announce_message.delete()
+        except discord.HTTPException as e:
+            logger.warning("Откат события: не удалось удалить анонс %s: %r", announce_message.id, e)
+    try:
+        await event.delete()
+    except discord.HTTPException as e:
+        logger.warning("Откат события: не удалось удалить событие %s: %r", event.id, e)
 
 
 def get_campaign_for_channel(channel: discord.abc.GuildChannel) -> str | None:

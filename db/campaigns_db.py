@@ -228,6 +228,67 @@ async def adopt_campaign_channel(
         return inserted
 
 
+async def register_existing_campaign(
+    guild_id: int,
+    name: str,
+    gm_role_id: int,
+    player_role_id: int,
+    category_id: int,
+    channels: list[tuple[int, str, bool]],
+    actor_id: int,
+) -> int | None:
+    """Записывает в БД кампанию, которая уже есть в Discord, но о которой БД
+    не знает (создана до перехода на БД или потеряна). Вызывается сверкой.
+
+    channels — каналы её категории: [(discord_channel_id, 'text'/'voice', gm_only)].
+    Каналы, уже известные БД, не трогаются.
+
+    Ничего не записывает (возвращает None), если в БД уже есть кампания
+    с этой категорией или с этой ролью ГМа (в любом статусе) — чтобы не
+    получить две записи об одной кампании. Иначе возвращает id новой записи.
+    Всё делается одной транзакцией: либо кампания записана целиком, либо никак.
+    """
+    async with transaction() as db:
+        cursor = await db.execute(
+            "SELECT 1 FROM campaigns WHERE category_id = ? OR gm_role_id = ?",
+            (category_id, gm_role_id),
+        )
+        if await cursor.fetchone() is not None:
+            return None
+
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await db.execute(
+            """
+            INSERT INTO campaigns (guild_id, name, gm_role_id, player_role_id, category_id, status, created_at)
+            VALUES (?, ?, ?, ?, ?, 'active', ?)
+            """,
+            (guild_id, name, gm_role_id, player_role_id, category_id, now),
+        )
+        campaign_id = cursor.lastrowid
+
+        for channel_id, channel_type, gm_only in channels:
+            await _insert_channel_if_missing(db, campaign_id, channel_id, channel_type, gm_only)
+
+        # 'registered' — запись появилась не через /campaign create, а сверкой:
+        # по истории будет видно, откуда кампания взялась в БД.
+        await db.execute(
+            """
+            INSERT INTO campaign_history (campaign_id, action, actor_id, created_at)
+            VALUES (?, 'registered', ?, ?)
+            """,
+            (campaign_id, actor_id, now),
+        )
+        return campaign_id
+
+
+async def get_all_campaign_category_ids() -> set[int]:
+    """id категорий всех кампаний в БД (у заархивированных категории нет) —
+    сверке нужно отличать уже известные категории от новых."""
+    db = await get_connection()
+    cursor = await db.execute("SELECT category_id FROM campaigns WHERE category_id IS NOT NULL")
+    return {row["category_id"] for row in await cursor.fetchall()}
+
+
 async def move_campaign_channel(discord_channel_id: int, new_campaign_id: int) -> None:
     """Перепривязывает канал к другой кампании — когда его вручную перенесли
     в категорию другой активной кампании."""

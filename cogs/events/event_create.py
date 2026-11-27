@@ -19,7 +19,9 @@ from .event_common import (
     edit_scheduled_event,
     generate_calendar_text_for_week,
     get_campaign_role,
+    logger,
     parse_time_input,
+    rollback_created_event,
     today_server,
     week_dates,
     week_start_for,
@@ -186,21 +188,35 @@ class CreateEventButton(discord.ui.Button):
             return
 
         announce_note = ""
-        announce_channel_id = None
-        announce_message_id = None
-        if v.selected_announce_channel is not None:
-            role = get_campaign_role(interaction.guild, v.campaign_name)
-            content = role.mention if role else None
-            announce_embed = build_event_announcement_embed(v.campaign_name, event)
-            announce_message = await v.selected_announce_channel.send(content=content, embed=announce_embed)
-            announce_channel_id = v.selected_announce_channel.id
-            announce_message_id = announce_message.id
-        else:
-            announce_note = " (анонс не отправлен — нет текстового канала кампании)"
+        announce_message = None
+        try:
+            announce_channel_id = None
+            announce_message_id = None
+            if v.selected_announce_channel is not None:
+                role = get_campaign_role(interaction.guild, v.campaign_name)
+                content = role.mention if role else None
+                announce_embed = build_event_announcement_embed(v.campaign_name, event)
+                announce_message = await v.selected_announce_channel.send(content=content, embed=announce_embed)
+                announce_channel_id = v.selected_announce_channel.id
+                announce_message_id = announce_message.id
+            else:
+                announce_note = " (анонс не отправлен — нет текстового канала кампании)"
 
-        await record_event(
-            event.id, v.campaign_id, interaction.user.id, announce_channel_id, announce_message_id
-        )
+            await record_event(
+                event.id, v.campaign_id, interaction.user.id, announce_channel_id, announce_message_id
+            )
+        except Exception:
+            # Событие уже создано в Discord, а анонс или запись в БД не получились.
+            # Убираем сделанное, чтобы не осталось «хвостов», которые бот потом
+            # не сможет ни отредактировать, ни отменить.
+            logger.exception("Не удалось завершить создание события «%s» — откатываю", v.title)
+            await rollback_created_event(event, announce_message)
+            await interaction.response.send_message(
+                "Не удалось создать событие: ошибка при сохранении. Ничего не создано — "
+                "попробуй ещё раз, а если не выйдет, напиши администратору бота.",
+                ephemeral=True,
+            )
+            return
 
         for item in v.children:
             item.disabled = True
