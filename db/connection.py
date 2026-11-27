@@ -1,9 +1,13 @@
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import aiosqlite
 
-DB_PATH = "data/argus.db"
+# Путь считается от папки проекта (на уровень выше папки db/), а не от папки,
+# из которой запущен бот, — иначе при запуске из другого места бот создал бы
+# новую пустую базу рядом и молча работал бы с ней.
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "argus.db"
 
 # Единственное соединение на всё время жизни бота.
 # Не открывается заново на каждый запрос — открывается один раз при старте.
